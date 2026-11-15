@@ -134,6 +134,11 @@
         transition: border-color .15s, background-color .15s;
     }
     .num-group .num-input:focus { border-color: var(--color-accent); background: #fbf6ff; }
+    .num-group .num-input.multi-hint {
+        background: #fff6e0;
+        border-color: #e0b871;
+        color: #7a4b00;
+    }
 
     .step-btn {
         width: 30px; height: 30px;
@@ -286,6 +291,11 @@
             </div>
         </div>
 
+        <div id="multiHint" class="hint hidden">
+            Выделено слоёв: <b id="multiCount">0</b>. Ползунки и поля X/Y/Масштаб работают как <b>сдвиг</b> для всех.
+            У каждого слоя свои координаты — в списке слоёв.
+        </div>
+
         <div id="offsetCard">
             <div class="slider-row">
                 <label for="offX">Смещение X</label>
@@ -377,7 +387,7 @@
         </div>
         <div class="hint">
             Клик — выделить один. Ctrl/Cmd+клик — добавить/убрать из выделения.
-            Shift+клик — выделить диапазон. При мультивыборе поля X/Y/Масштаб применяются ко всем выделенным.
+            Shift+клик — выделить диапазон. При мультивыборе ползунки X/Y/Масштаб — это сдвиг для всех.
         </div>
         <div class="layers-list" id="layersList">
             <div class="empty-layers" id="emptyLayers">Пока нет слоёв</div>
@@ -483,6 +493,9 @@
     const $scaleDec = document.getElementById("scaleDec");
     const $scaleInc = document.getElementById("scaleInc");
 
+    const $multiHint = document.getElementById("multiHint");
+    const $multiCount = document.getElementById("multiCount");
+
     const $offsetCard = document.getElementById("offsetCard");
     const $offX = document.getElementById("offX");
     const $offY = document.getElementById("offY");
@@ -526,6 +539,10 @@
     let debounceTimer = null;
     let playerDebounceTimer = null;
     let lastClickedIndex = -1;
+
+    // Для мультирежима ползунков: точка «0» и снапшоты
+    let multiBaseX = 0, multiBaseY = 0, multiBaseScale = 1;
+    let multiSnapshot = null; // Map id -> {x,y,scale}
 
     function setStatus(msg, type = "info") { if (!$status) return; $status.textContent = msg; $status.className = "status " + type; }
     function setImageStatus(msg, type = "info") { if (!$imageStatus) return; $imageStatus.textContent = msg; $imageStatus.className = "status " + type; }
@@ -578,10 +595,7 @@
 
     function getLayer(id) { return layers.find(l => l.id === id) || null; }
     function getPrimary() { return getLayer(primaryId); }
-
-    function getSelectedLayers() {
-        return selectedIds.map(id => getLayer(id)).filter(Boolean);
-    }
+    function getSelectedLayers() { return selectedIds.map(id => getLayer(id)).filter(Boolean); }
 
     // -------- Создание слоя --------
     function createLayer({ team = null, player = null, src, name = null, kind = "logo", role = "", maskId = null, offsetX = 0, offsetY = 0, x, y, scale, autoOffset = false, selectAfter = true }) {
@@ -774,6 +788,7 @@
     }
 
     function setSelection(ids, primary = null) {
+        const prevMulti = selectedIds.length > 1;
         selectedIds = ids.slice();
         if (ids.length === 0) primaryId = null;
         else if (primary !== null && ids.includes(primary)) primaryId = primary;
@@ -791,6 +806,12 @@
             item.classList.toggle("selected-primary", id === primaryId);
         });
         if (primaryId !== null) lastClickedIndex = layers.findIndex(l => l.id === primaryId);
+
+        // при переходе в/из мультирежима сбрасываем базовую точку
+        if (prevMulti !== (selectedIds.length > 1)) {
+            resetMultiBase();
+        }
+
         updateControlsState();
         syncControlsWithSelected();
         updateSelectedTitle();
@@ -864,6 +885,7 @@
         selectedIds = [];
         primaryId = null;
         lastClickedIndex = -1;
+        resetMultiBase();
         renderLayersList();
         updateControlsState();
         updateTemplateState();
@@ -896,22 +918,19 @@
     function updateControlsState() {
         const hasAny = selectedIds.length > 0;
         const hasOne = selectedIds.length === 1 && !!getPrimary();
+        const multi = selectedIds.length > 1;
 
-        // Поля, которые доступны и при мультивыборе (применяются ко всем)
         [$posX, $posY, $posXNum, $posYNum].forEach($el => { if ($el) $el.disabled = !hasAny; });
         [$posXDec, $posXInc, $posYDec, $posYInc].forEach($el => { if ($el) $el.disabled = !hasAny; });
-
         if ($scale) $scale.disabled = !hasAny;
         if ($scaleNum) $scaleNum.disabled = !hasAny;
         if ($scaleDec) $scaleDec.disabled = !hasAny;
         if ($scaleInc) $scaleInc.disabled = !hasAny;
 
-        // Кнопки «по центру»/«сброс» — тоже доступны для мультивыбора
         if ($centerBtn) $centerBtn.disabled = !hasAny;
         if ($resetBtn) $resetBtn.disabled = !hasAny;
         if ($removeBtn) $removeBtn.disabled = !hasAny;
 
-        // Поля, доступные только при одиночном выборе
         if ($layerName) $layerName.disabled = !hasOne;
         if ($layerRole) $layerRole.disabled = !hasOne;
         if ($layerMask) $layerMask.disabled = !hasOne;
@@ -922,6 +941,13 @@
         const idx = hasOne ? layers.findIndex(l => l.id === primaryId) : -1;
         if ($upBtn) $upBtn.disabled = !hasOne || idx === layers.length - 1;
         if ($downBtn) $downBtn.disabled = !hasOne || idx === 0;
+
+        // Мультирежим: показываем подсказку, поля X/Y/scale показывают 0/1 (дельта)
+        if ($multiHint) $multiHint.classList.toggle("hidden", !multi);
+        if ($multiCount) $multiCount.textContent = String(selectedIds.length);
+        if ($posXNum) $posXNum.classList.toggle("multi-hint", multi);
+        if ($posYNum) $posYNum.classList.toggle("multi-hint", multi);
+        if ($scaleNum) $scaleNum.classList.toggle("multi-hint", multi);
 
         if (!hasAny) {
             if ($layerName) $layerName.value = "";
@@ -941,6 +967,21 @@
     }
 
     function syncControlsWithSelected() {
+        const multi = selectedIds.length > 1;
+        if (multi) {
+            // В мультирежиме поля X/Y показывают «дельта 0», scale — «дельта 0»
+            if ($posX) $posX.value = 0;
+            if ($posY) $posY.value = 0;
+            if ($scale) $scale.value = 1;
+            if ($posXNum) $posXNum.value = 0;
+            if ($posYNum) $posYNum.value = 0;
+            if ($scaleNum) $scaleNum.value = 0;
+            if ($layerName) $layerName.value = "";
+            if ($layerRole) $layerRole.value = "";
+            if ($layerMask) $layerMask.value = "";
+            return;
+        }
+
         const layer = getPrimary();
         if (!layer) return;
         const rx = Math.round(layer.x);
@@ -1173,6 +1214,83 @@
         }
     }
 
+    // ============ МУЛЬТИРЕЖИМ ПОЛЗУНКОВ ============
+    function resetMultiBase() {
+        multiBaseX = 0;
+        multiBaseY = 0;
+        multiBaseScale = 1;
+        multiSnapshot = null;
+    }
+
+    function takeMultiSnapshot() {
+        multiSnapshot = new Map();
+        getSelectedLayers().forEach(l => {
+            // Для слоя с маской «двигаем маску». Учитываем это в снапшоте.
+            if (l.maskId) {
+                const mask = getLayer(l.maskId);
+                if (mask && !selectedIds.includes(mask.id)) {
+                    if (!multiSnapshot.has("mask:" + mask.id)) {
+                        multiSnapshot.set("mask:" + mask.id, { id: mask.id, x: mask.x, y: mask.y, scale: mask.scale });
+                    }
+                    return;
+                }
+                if (mask && selectedIds.includes(mask.id)) {
+                    // маска сама в выделении — её снапшот возьмётся отдельным проходом
+                    return;
+                }
+            }
+            if (!multiSnapshot.has("layer:" + l.id)) {
+                multiSnapshot.set("layer:" + l.id, { id: l.id, x: l.x, y: l.y, scale: l.scale });
+            }
+        });
+    }
+
+    function applyDeltaX(dx) {
+        if (!multiSnapshot) takeMultiSnapshot();
+        multiSnapshot.forEach(s => {
+            const l = getLayer(s.id);
+            if (!l) return;
+            l.x = s.x + dx;
+            applyLayerTransform(l);
+            syncChildrenOfMask(l.id);
+            refreshLayerItem(l);
+        });
+        // пересобрать позиции картинок с масками
+        getSelectedLayers().forEach(l => { if (l.maskId) applyMaskToLayer(l); });
+        // и на всякий случай пересобрать у всех «родителей»
+        multiSnapshot.forEach(s => syncChildrenOfMask(s.id));
+    }
+
+    function applyDeltaY(dy) {
+        if (!multiSnapshot) takeMultiSnapshot();
+        multiSnapshot.forEach(s => {
+            const l = getLayer(s.id);
+            if (!l) return;
+            l.y = s.y + dy;
+            applyLayerTransform(l);
+            syncChildrenOfMask(l.id);
+            refreshLayerItem(l);
+        });
+        getSelectedLayers().forEach(l => { if (l.maskId) applyMaskToLayer(l); });
+        multiSnapshot.forEach(s => syncChildrenOfMask(s.id));
+    }
+
+    function applyDeltaScale(delta) {
+        if (!multiSnapshot) takeMultiSnapshot();
+        multiSnapshot.forEach(s => {
+            const l = getLayer(s.id);
+            if (!l) return;
+            const newScale = clamp(s.scale + delta, 0.05, 3);
+            l.scale = newScale;
+            applyLayerTransform(l);
+            applyMaskToLayer(l);
+            syncChildrenOfMask(l.id);
+            refreshLayerItem(l);
+        });
+        getSelectedLayers().forEach(l => { if (l.maskId) applyMaskToLayer(l); });
+        multiSnapshot.forEach(s => syncChildrenOfMask(s.id));
+    }
+
     // -------- Инициализация редактора --------
     function initEditor() {
         $teamName.addEventListener("input", () => {
@@ -1288,139 +1406,67 @@
             setStatus(`Маска слоя: ${newId ? (getLayer(newId)?.name || "#" + newId) : "—"}`, "info");
         });
 
-        // ---------- МУЛЬТИРЕДАКТИРОВАНИЕ X / Y / SCALE ----------
-        function applyXToAll(v) {
-            v = clamp(v, -1000, 2000);
-            const sel = getSelectedLayers();
-            if (!sel.length) return;
-            // Для слоя с маской X меняет маску, а не сам слой
-            const processedMasks = new Set();
-            sel.forEach(l => {
-                if (l.maskId) {
-                    if (processedMasks.has(l.maskId)) return;
-                    if (sel.some(x => x.id === l.maskId)) return; // маска сама в выделении — её подвинет свой шаг
-                    const mask = getLayer(l.maskId);
-                    if (mask) {
-                        processedMasks.add(l.maskId);
-                        mask.x = v;
-                        applyLayerTransform(mask);
-                        syncChildrenOfMask(mask.id);
-                    }
-                } else {
-                    l.x = v;
-                    applyLayerTransform(l);
-                    syncChildrenOfMask(l.id);
-                }
-            });
-            // Если маска сама в выделении — ей тоже ставим X
-            sel.forEach(l => {
-                if (!l.maskId) return; // маски-«родители» уже обрабатываются как слои без maskId, если сами не в маске
-            });
-            // Отдельно пройдёмся по тем, кто служит маской и сам выделен — им тоже поставить X
-            sel.forEach(l => {
-                // «маска-родитель» — это слой без maskId, у которого есть дети.
-                // Он уже обработан в ветке else выше. Ничего не делаем.
-            });
-
-            if ($posX) $posX.value = v;
-            if ($posXNum) $posXNum.value = Math.round(v);
-            sel.forEach(l => refreshLayerItem(l));
-        }
-
-        function applyYToAll(v) {
-            v = clamp(v, -1000, 2000);
-            const sel = getSelectedLayers();
-            if (!sel.length) return;
-            const processedMasks = new Set();
-            sel.forEach(l => {
-                if (l.maskId) {
-                    if (processedMasks.has(l.maskId)) return;
-                    if (sel.some(x => x.id === l.maskId)) return;
-                    const mask = getLayer(l.maskId);
-                    if (mask) {
-                        processedMasks.add(l.maskId);
-                        mask.y = v;
-                        applyLayerTransform(mask);
-                        syncChildrenOfMask(mask.id);
-                    }
-                } else {
-                    l.y = v;
-                    applyLayerTransform(l);
-                    syncChildrenOfMask(l.id);
-                }
-            });
-            if ($posY) $posY.value = v;
-            if ($posYNum) $posYNum.value = Math.round(v);
-            sel.forEach(l => refreshLayerItem(l));
-        }
-
-        function applyScaleToAll(v) {
-            v = clamp(v, 0.05, 3);
-            const sel = getSelectedLayers();
-            if (!sel.length) return;
-            const processedMasks = new Set();
-            sel.forEach(l => {
-                if (l.maskId) {
-                    if (processedMasks.has(l.maskId)) return;
-                    if (sel.some(x => x.id === l.maskId)) return;
-                    const mask = getLayer(l.maskId);
-                    if (mask) {
-                        processedMasks.add(l.maskId);
-                        mask.scale = v;
-                        applyLayerTransform(mask);
-                        syncChildrenOfMask(mask.id);
-                    }
-                } else {
-                    l.scale = v;
-                    applyLayerTransform(l);
-                    applyMaskToLayer(l);
-                    syncChildrenOfMask(l.id);
-                }
-            });
-            if ($scale) $scale.value = v.toFixed(2);
-            if ($scaleNum) $scaleNum.value = v.toFixed(2);
-            sel.forEach(l => refreshLayerItem(l));
-        }
-
-        // одиночное применение — если выбран 1, работает точечно; если много — ко всем
-        function applyX(v) {
-            if (selectedIds.length > 1) return applyXToAll(v);
+        // ----- Единые обработчики X / Y / Scale -----
+        // В мультирежиме: значение поля/ползунка = ДЕЛЬТА от базовой точки.
+        // В одиночном: значение = абсолютная координата.
+        function applyXInput(rawValue) {
+            if (selectedIds.length > 1) {
+                const dx = rawValue;
+                applyDeltaX(dx);
+                if ($posX) $posX.value = clamp(dx, -1000, 2000);
+                if ($posXNum) $posXNum.value = Math.round(dx);
+                return;
+            }
             const l = getPrimary(); if (!l) return;
+            const v = clamp(rawValue, -1000, 2000);
             if (l.maskId) {
                 const mask = getLayer(l.maskId);
                 if (mask) { mask.x = v; applyLayerTransform(mask); applyMaskToLayer(l); syncChildrenOfMask(mask.id); }
             } else {
                 l.x = v; applyLayerTransform(l); syncChildrenOfMask(l.id);
             }
-            $posX.value = clamp(v, -1000, 2000);
-            $posXNum.value = Math.round(v);
+            if ($posX) $posX.value = v;
+            if ($posXNum) $posXNum.value = Math.round(v);
             refreshLayerItem(l);
         }
-        function applyY(v) {
-            if (selectedIds.length > 1) return applyYToAll(v);
+        function applyYInput(rawValue) {
+            if (selectedIds.length > 1) {
+                const dy = rawValue;
+                applyDeltaY(dy);
+                if ($posY) $posY.value = clamp(dy, -1000, 2000);
+                if ($posYNum) $posYNum.value = Math.round(dy);
+                return;
+            }
             const l = getPrimary(); if (!l) return;
+            const v = clamp(rawValue, -1000, 2000);
             if (l.maskId) {
                 const mask = getLayer(l.maskId);
                 if (mask) { mask.y = v; applyLayerTransform(mask); applyMaskToLayer(l); syncChildrenOfMask(mask.id); }
             } else {
                 l.y = v; applyLayerTransform(l); syncChildrenOfMask(l.id);
             }
-            $posY.value = clamp(v, -1000, 2000);
-            $posYNum.value = Math.round(v);
+            if ($posY) $posY.value = v;
+            if ($posYNum) $posYNum.value = Math.round(v);
             refreshLayerItem(l);
         }
-        function applyScale(v) {
-            if (selectedIds.length > 1) return applyScaleToAll(v);
+        function applyScaleInput(rawValue) {
+            if (selectedIds.length > 1) {
+                const delta = rawValue; // дельта масштаба
+                applyDeltaScale(delta);
+                if ($scale) $scale.value = clamp(1 + delta, 0.05, 3).toFixed(2);
+                if ($scaleNum) $scaleNum.value = Math.round(delta * 100) / 100;
+                return;
+            }
             const l = getPrimary(); if (!l) return;
-            v = clamp(v, 0.05, 3);
+            const v = clamp(rawValue, 0.05, 3);
             if (l.maskId) {
                 const mask = getLayer(l.maskId);
                 if (mask) { mask.scale = v; applyLayerTransform(mask); applyMaskToLayer(l); syncChildrenOfMask(mask.id); }
             } else {
                 l.scale = v; applyLayerTransform(l); applyMaskToLayer(l); syncChildrenOfMask(l.id);
             }
-            $scale.value = v.toFixed(2);
-            $scaleNum.value = v.toFixed(2);
+            if ($scale) $scale.value = v.toFixed(2);
+            if ($scaleNum) $scaleNum.value = v.toFixed(2);
             refreshLayerItem(l);
         }
         function applyOffsetX(v) {
@@ -1440,12 +1486,84 @@
             refreshLayerItem(l);
         }
 
-        $posX.addEventListener("input", () => applyX(parseFloat($posX.value)));
-        $posY.addEventListener("input", () => applyY(parseFloat($posY.value)));
-        $scale.addEventListener("input", () => applyScale(parseFloat($scale.value)));
-        $posXNum.addEventListener("input", () => { const v = parseFloat($posXNum.value); if (!Number.isNaN(v)) applyX(v); });
-        $posYNum.addEventListener("input", () => { const v = parseFloat($posYNum.value); if (!Number.isNaN(v)) applyY(v); });
-        $scaleNum.addEventListener("input", () => { const v = parseFloat($scaleNum.value); if (!Number.isNaN(v)) applyScale(v); });
+        // При начале взаимодействия с ползунками — снимаем снапшот, если мультивыбор
+        function onSliderInteractionStart() {
+            if (selectedIds.length > 1 && !multiSnapshot) {
+                takeMultiSnapshot();
+            }
+        }
+        [$posX, $posY, $scale].forEach($s => {
+            if (!$s) return;
+            $s.addEventListener("pointerdown", onSliderInteractionStart);
+            $s.addEventListener("touchstart", onSliderInteractionStart, { passive: true });
+        });
+
+        $posX.addEventListener("input", () => {
+            const v = parseFloat($posX.value);
+            if (selectedIds.length > 1) {
+                onSliderInteractionStart();
+                applyDeltaX(v);
+                if ($posXNum) $posXNum.value = Math.round(v);
+            } else {
+                applyXInput(v);
+            }
+        });
+        $posY.addEventListener("input", () => {
+            const v = parseFloat($posY.value);
+            if (selectedIds.length > 1) {
+                onSliderInteractionStart();
+                applyDeltaY(v);
+                if ($posYNum) $posYNum.value = Math.round(v);
+            } else {
+                applyYInput(v);
+            }
+        });
+        $scale.addEventListener("input", () => {
+            const v = parseFloat($scale.value); // 1..3, это множитель
+            if (selectedIds.length > 1) {
+                onSliderInteractionStart();
+                const delta = v - 1; // -0.95..2
+                applyDeltaScale(delta);
+                if ($scaleNum) $scaleNum.value = Math.round(delta * 100) / 100;
+            } else {
+                applyScaleInput(v);
+            }
+        });
+
+        // Числовые поля X/Y
+        $posXNum.addEventListener("input", () => {
+            const v = parseFloat($posXNum.value);
+            if (Number.isNaN(v)) return;
+            if (selectedIds.length > 1) {
+                onSliderInteractionStart();
+                applyDeltaX(v);
+                if ($posX) $posX.value = clamp(v, -1000, 2000);
+            } else {
+                applyXInput(v);
+            }
+        });
+        $posYNum.addEventListener("input", () => {
+            const v = parseFloat($posYNum.value);
+            if (Number.isNaN(v)) return;
+            if (selectedIds.length > 1) {
+                onSliderInteractionStart();
+                applyDeltaY(v);
+                if ($posY) $posY.value = clamp(v, -1000, 2000);
+            } else {
+                applyYInput(v);
+            }
+        });
+        $scaleNum.addEventListener("input", () => {
+            const v = parseFloat($scaleNum.value);
+            if (Number.isNaN(v)) return;
+            if (selectedIds.length > 1) {
+                onSliderInteractionStart();
+                applyDeltaScale(v);
+                if ($scale) $scale.value = clamp(1 + v, 0.05, 3).toFixed(2);
+            } else {
+                applyScaleInput(v);
+            }
+        });
         $posXNum.addEventListener("blur", () => syncControlsWithSelected());
         $posYNum.addEventListener("blur", () => syncControlsWithSelected());
         $scaleNum.addEventListener("blur", () => syncControlsWithSelected());
@@ -1457,59 +1575,76 @@
         $offXNum.addEventListener("blur", () => syncControlsWithSelected());
         $offYNum.addEventListener("blur", () => syncControlsWithSelected());
 
+        // Кнопки −/+
         $posXDec.addEventListener("click", () => {
             if (selectedIds.length > 1) {
-                const l = getPrimary(); if (!l) return;
-                applyXToAll(l.x - 1);
+                onSliderInteractionStart();
+                const l = getPrimary(); const v = (l ? l.x : 0) - 1;
+                applyDeltaX(v);
+                if ($posX) $posX.value = clamp(v, -1000, 2000);
+                if ($posXNum) $posXNum.value = Math.round(v);
                 return;
             }
             const l = getPrimary(); if (!l) return;
-            applyX(Math.round(l.x) - 1);
+            applyXInput(Math.round(l.x) - 1);
         });
         $posXInc.addEventListener("click", () => {
             if (selectedIds.length > 1) {
-                const l = getPrimary(); if (!l) return;
-                applyXToAll(l.x + 1);
+                onSliderInteractionStart();
+                const l = getPrimary(); const v = (l ? l.x : 0) + 1;
+                applyDeltaX(v);
+                if ($posX) $posX.value = clamp(v, -1000, 2000);
+                if ($posXNum) $posXNum.value = Math.round(v);
                 return;
             }
             const l = getPrimary(); if (!l) return;
-            applyX(Math.round(l.x) + 1);
+            applyXInput(Math.round(l.x) + 1);
         });
         $posYDec.addEventListener("click", () => {
             if (selectedIds.length > 1) {
-                const l = getPrimary(); if (!l) return;
-                applyYToAll(l.y - 1);
+                onSliderInteractionStart();
+                const l = getPrimary(); const v = (l ? l.y : 0) - 1;
+                applyDeltaY(v);
+                if ($posY) $posY.value = clamp(v, -1000, 2000);
+                if ($posYNum) $posYNum.value = Math.round(v);
                 return;
             }
             const l = getPrimary(); if (!l) return;
-            applyY(Math.round(l.y) - 1);
+            applyYInput(Math.round(l.y) - 1);
         });
         $posYInc.addEventListener("click", () => {
             if (selectedIds.length > 1) {
-                const l = getPrimary(); if (!l) return;
-                applyYToAll(l.y + 1);
+                onSliderInteractionStart();
+                const l = getPrimary(); const v = (l ? l.y : 0) + 1;
+                applyDeltaY(v);
+                if ($posY) $posY.value = clamp(v, -1000, 2000);
+                if ($posYNum) $posYNum.value = Math.round(v);
                 return;
             }
             const l = getPrimary(); if (!l) return;
-            applyY(Math.round(l.y) + 1);
+            applyYInput(Math.round(l.y) + 1);
         });
         $scaleDec.addEventListener("click", () => {
             if (selectedIds.length > 1) {
-                const l = getPrimary(); if (!l) return;
-                applyScaleToAll(Math.round((l.scale - 0.01) * 100) / 100);
+                onSliderInteractionStart();
+                applyDeltaScale(-0.01);
+                if ($scale) $scale.value = (1 - 0.01).toFixed(2);
+                if ($scaleNum) $scaleNum.value = "-0.01";
                 return;
             }
             const l = getPrimary(); if (!l) return;
-            applyScale(Math.round((l.scale - 0.01) * 100) / 100);
+            applyScaleInput(Math.round((l.scale - 0.01) * 100) / 100);
         });
         $scaleInc.addEventListener("click", () => {
             if (selectedIds.length > 1) {
-                const l = getPrimary(); if (!l) return;
-                applyScaleToAll(Math.round((l.scale + 0.01) * 100) / 100);
+                onSliderInteractionStart();
+                applyDeltaScale(0.01);
+                if ($scale) $scale.value = (1 + 0.01).toFixed(2);
+                if ($scaleNum) $scaleNum.value = "0.01";
                 return;
             }
             const l = getPrimary(); if (!l) return;
-            applyScale(Math.round((l.scale + 0.01) * 100) / 100);
+            applyScaleInput(Math.round((l.scale + 0.01) * 100) / 100);
         });
         $offXDec.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyOffsetX(Math.round(l.offsetX) - 1); });
         $offXInc.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyOffsetX(Math.round(l.offsetX) + 1); });
@@ -1520,8 +1655,29 @@
             const sel = getSelectedLayers();
             if (!sel.length) return;
             if (sel.length > 1) {
-                applyXToAll(BOARD_SIZE / 2);
-                applyYToAll(BOARD_SIZE / 2);
+                // Для мультирежима «по центру» — двигаем всех так, чтобы их «центр масс» оказался в центре
+                // Но проще и предсказуемее: ставим КАЖДОМУ X=500, Y=500 — как и раньше.
+                // Но вы просили «не одинаковые». Тогда сделаем сдвиг: двигаем группу так,
+                // чтобы её bbox-центр оказался в центре холста.
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                sel.forEach(l => {
+                    const w = l.baseW * l.scale, h = l.baseH * l.scale;
+                    minX = Math.min(minX, l.x - w / 2);
+                    maxX = Math.max(maxX, l.x + w / 2);
+                    minY = Math.min(minY, l.y - h / 2);
+                    maxY = Math.max(maxY, l.y + h / 2);
+                });
+                const cx = (minX + maxX) / 2;
+                const cy = (minY + maxY) / 2;
+                const dx = BOARD_SIZE / 2 - cx;
+                const dy = BOARD_SIZE / 2 - cy;
+                multiSnapshot = null; // сброс перед групповым сдвигом
+                takeMultiSnapshot();
+                applyDeltaX(dx);
+                applyDeltaY(dy);
+                multiSnapshot = null;
+                syncControlsWithSelected();
+                sel.forEach(l => refreshLayerItem(l));
                 return;
             }
             const l = getPrimary(); if (!l) return;
@@ -1536,7 +1692,26 @@
             refreshLayerItem(l);
         });
         $resetBtn.addEventListener("click", () => {
-            if (selectedIds.length > 1) { applyScaleToAll(1); return; }
+            if (selectedIds.length > 1) {
+                // сбрасываем масштаб у всех к 1 (одинаковое — это ок для сброса)
+                multiSnapshot = null;
+                takeMultiSnapshot();
+                const sel = getSelectedLayers();
+                sel.forEach(l => {
+                    if (l.maskId) {
+                        const mask = getLayer(l.maskId);
+                        if (mask && !selectedIds.includes(mask.id)) { mask.scale = 1; applyLayerTransform(mask); }
+                    } else {
+                        l.scale = 1;
+                        applyLayerTransform(l);
+                    }
+                });
+                sel.forEach(l => { applyMaskToLayer(l); syncChildrenOfMask(l.id); });
+                multiSnapshot = null;
+                syncControlsWithSelected();
+                sel.forEach(l => refreshLayerItem(l));
+                return;
+            }
             const l = getPrimary(); if (!l) return;
             if (l.maskId) { l.offsetX = 0; l.offsetY = 0; applyMaskToLayer(l); }
             else { l.scale = 1; applyLayerTransform(l); applyMaskToLayer(l); syncChildrenOfMask(l.id); }
