@@ -1,0 +1,1963 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Холст — редактор и шаблон</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700&display=swap" rel="stylesheet" />
+<style>
+    :root {
+        --color-ink: #1c1c1e;
+        --color-navy: #1a2b3c;
+        --color-field: #f2f2f7;
+        --color-muted: #8e8e93;
+        --color-white: #fff;
+        --color-accent: #9a5cf8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { color-scheme: light; width: 100%; }
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        background-color: var(--color-field);
+        display: flex; flex-direction: column; align-items: center;
+        padding: 20px 16px; min-height: 100vh; gap: 12px;
+    }
+    .preview {
+        aspect-ratio: 1 / 1;
+        width: 100%; max-width: 521px;
+        position: relative; overflow: hidden;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    }
+    .board {
+        --k: 0.521;
+        width: 1000px; height: 1000px;
+        transform: scale(var(--k));
+        transform-origin: 0 0;
+        position: absolute; top: 0; left: 0; overflow: hidden;
+        background: linear-gradient(135deg, #3a4044, #1f2327);
+        touch-action: none; user-select: none;
+    }
+    .board.viewer { touch-action: auto; }
+    .board.viewer .layer { cursor: default; outline: none !important; }
+    .board.dragging { cursor: grabbing; }
+
+    .layer {
+        position: absolute; top: 0; left: 0;
+        transform-origin: 0 0;
+        pointer-events: auto; cursor: move;
+        will-change: transform;
+        outline: 2px solid transparent; outline-offset: 2px;
+    }
+    .layer.selected { outline-color: rgba(154, 92, 248, .9); }
+    .layer.mask-parent { outline: 2px dashed rgba(255, 165, 0, .8); }
+    .layer img {
+        display: block; width: 100%; height: 100%;
+        pointer-events: none; user-select: none;
+        -webkit-user-drag: none;
+    }
+    .layer .clip {
+        width: 100%; height: 100%;
+        overflow: hidden;
+        position: relative;
+    }
+    .layer .clip img {
+        width: 100%; height: 100%;
+        object-fit: cover;
+        display: block;
+    }
+
+    .controls {
+        width: 100%; max-width: 521px;
+        display: flex; flex-direction: column; gap: 10px;
+    }
+    .card {
+        background: var(--color-white);
+        border-radius: 12px; padding: 16px;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+        display: flex; flex-direction: column; gap: 10px;
+    }
+    .card-title { font-size: 15px; font-weight: 600; color: var(--color-ink); }
+    .card-head {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 10px; flex-wrap: wrap;
+    }
+    .card-head-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    label.row { display: flex; flex-direction: column; gap: 6px; }
+    label.row > span { font-size: 14px; font-weight: 500; color: var(--color-ink); }
+    input[type="text"], select, textarea {
+        width: 100%; border: 0; border-radius: 8px;
+        background: var(--color-field); padding: 10px 12px;
+        font-size: 15px; color: var(--color-ink); outline: none;
+        transition: background-color .15s;
+        font-family: inherit;
+    }
+    textarea {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px; min-height: 120px; resize: vertical; line-height: 1.4;
+    }
+    input[type="text"]:focus, select:focus, textarea:focus { background: #e5e5ea; }
+
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    button {
+        border: 0; border-radius: 10px; padding: 11px 14px;
+        font-size: 14px; font-weight: 600; cursor: pointer;
+        transition: opacity .15s;
+    }
+    button:active { opacity: .85; }
+    button:disabled { opacity: .4; cursor: not-allowed; }
+    .primary { background: var(--color-navy); color: var(--color-white); }
+    .secondary { background: var(--color-field); color: var(--color-navy); }
+    .success { background: #13a05a; color: var(--color-white); }
+    .danger { background: #fdecec; color: #c0392b; }
+
+    .icon-btn {
+        width: 38px; height: 38px;
+        display: inline-flex; align-items: center; justify-content: center;
+        padding: 0; font-size: 16px; line-height: 1;
+    }
+
+    .slider-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+    .slider-row > label {
+        min-width: 90px; font-size: 14px; font-weight: 500; color: var(--color-ink);
+    }
+    .slider-row input[type="range"] { flex: 1; min-width: 0; accent-color: var(--color-navy); }
+
+    .num-group { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+    .num-group .num-input {
+        width: 78px; border: 1px solid #d9d9e0; border-radius: 8px;
+        background: var(--color-white); padding: 7px 8px;
+        font-size: 14px; font-weight: 600; color: var(--color-navy);
+        text-align: right; font-variant-numeric: tabular-nums; outline: none;
+        transition: border-color .15s, background-color .15s;
+    }
+    .num-group .num-input:focus { border-color: var(--color-accent); background: #fbf6ff; }
+
+    .step-btn {
+        width: 30px; height: 30px;
+        display: inline-flex; align-items: center; justify-content: center;
+        padding: 0; border-radius: 8px;
+        background: var(--color-field); color: var(--color-navy);
+        font-size: 18px; font-weight: 700; line-height: 1; user-select: none;
+    }
+    .step-btn:hover:not(:disabled) { background: #e5e5ea; }
+    .step-btn:active:not(:disabled) { background: #dcdce2; }
+
+    .layers-list { display: flex; flex-direction: column; gap: 6px; }
+    .layer-item {
+        display: flex; align-items: center; gap: 10px;
+        padding: 8px 10px; border-radius: 10px;
+        background: var(--color-field); cursor: pointer;
+        border: 2px solid transparent;
+        transition: background-color .15s, border-color .15s;
+    }
+    .layer-item:hover { background: #e9e9ee; }
+    .layer-item.selected { border-color: var(--color-accent); background: #f4eefe; }
+    .layer-thumb {
+        width: 36px; height: 36px; border-radius: 8px;
+        background: #ffffff; display: flex; align-items: center; justify-content: center;
+        overflow: hidden; flex-shrink: 0;
+    }
+    .layer-thumb img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+    .layer-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .layer-name {
+        font-size: 14px; font-weight: 600; color: var(--color-ink);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .layer-name-edit {
+        width: 100%; border: 1px solid var(--color-accent); border-radius: 6px;
+        padding: 3px 6px; font-size: 14px; font-weight: 600; color: var(--color-ink);
+        background: #fff; outline: none; font-family: inherit;
+    }
+    .layer-coords {
+        font-size: 12px; color: var(--color-muted);
+        font-variant-numeric: tabular-nums;
+    }
+    .layer-role {
+        display: inline-block; margin-top: 2px;
+        font-size: 11px; font-weight: 600;
+        padding: 1px 6px; border-radius: 4px;
+        background: #e9e1fd; color: #5b2fb8;
+        white-space: nowrap; align-self: flex-start;
+    }
+    .layer-role.mask-role { background: #ffe0b3; color: #8a4b00; }
+    .layer-role.mask-parent-role { background: #ffd1d1; color: #8a1a1a; }
+    .layer-remove {
+        border: 0; background: transparent; cursor: pointer;
+        color: #c0392b; font-size: 18px; line-height: 1;
+        padding: 4px 8px; border-radius: 6px;
+    }
+    .layer-remove:hover { background: #fdecec; }
+    .empty-layers {
+        font-size: 13px; color: var(--color-muted);
+        text-align: center; padding: 14px 0;
+    }
+    .status { font-size: 13px; min-height: 18px; }
+    .status.error { color: #c0392b; }
+    .status.ok { color: #13a05a; }
+    .status.info { color: var(--color-muted); }
+    .hint { font-size: 12px; color: var(--color-muted); line-height: 1.4; }
+
+    /* Блок смещения внутри маски — показываем только когда есть маска */
+    #offsetCard.hidden { display: none; }
+
+    .viewer-controls .card { gap: 12px; }
+    .viewer-controls .field-group {
+        display: flex; flex-direction: column; gap: 6px;
+        padding: 10px 12px; background: var(--color-field); border-radius: 10px;
+    }
+    .viewer-controls .field-group label {
+        font-size: 13px; font-weight: 600; color: var(--color-navy);
+    }
+    .viewer-controls .field-group .row-inline { display: flex; gap: 6px; }
+    .viewer-controls .field-group .row-inline input { flex: 1; background: #fff; }
+    .viewer-controls .field-group .row-inline button { flex-shrink: 0; }
+    .viewer-controls .field-group .fb { font-size: 12px; min-height: 14px; }
+    .viewer-controls .field-group .fb.error { color: #c0392b; }
+    .viewer-controls .field-group .fb.ok { color: #13a05a; }
+    .viewer-controls .field-group .fb.info { color: var(--color-muted); }
+    .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="preview">
+    <div class="board" id="board"></div>
+</div>
+
+<!-- ===== EDITOR ===== -->
+<div class="controls" id="editorControls">
+
+    <div class="card">
+        <div class="card-title" id="selTitle">Настройки слоя</div>
+
+        <label class="row">
+            <span>Название слоя</span>
+            <input type="text" id="layerName" placeholder="Например: Логотип команды" autocomplete="off" disabled />
+        </label>
+
+        <label class="row">
+            <span>Функция слоя (role)</span>
+            <select id="layerRole" disabled>
+                <option value="">— Без функции —</option>
+                <option value="team-logo">Логотип команды (по названию из TEAMS)</option>
+                <option value="player-photo">Фото игрока (по нику из PLAYERS)</option>
+                <option value="image-swap">Картинка, заменяемая по URL</option>
+                <option value="static">Статичная картинка</option>
+            </select>
+        </label>
+
+        <label class="row">
+            <span>Маска — слой (обрезать по границам этого слоя)</span>
+            <select id="layerMask" disabled>
+                <option value="">— Без маски —</option>
+            </select>
+        </label>
+
+        <div class="slider-row">
+            <label for="posX">Позиция X</label>
+            <input type="range" id="posX" min="-1000" max="2000" step="1" value="500" disabled />
+            <div class="num-group">
+                <button type="button" class="step-btn" id="posXDec" disabled title="−1">−</button>
+                <input type="number" id="posXNum" class="num-input" step="1" disabled />
+                <button type="button" class="step-btn" id="posXInc" disabled title="+1">+</button>
+            </div>
+        </div>
+
+        <div class="slider-row">
+            <label for="posY">Позиция Y</label>
+            <input type="range" id="posY" min="-1000" max="2000" step="1" value="500" disabled />
+            <div class="num-group">
+                <button type="button" class="step-btn" id="posYDec" disabled title="−1">−</button>
+                <input type="number" id="posYNum" class="num-input" step="1" disabled />
+                <button type="button" class="step-btn" id="posYInc" disabled title="+1">+</button>
+            </div>
+        </div>
+
+        <div class="slider-row">
+            <label for="scale">Масштаб</label>
+            <input type="range" id="scale" min="0.05" max="3" step="0.01" value="1" disabled />
+            <div class="num-group">
+                <button type="button" class="step-btn" id="scaleDec" disabled title="−0.01">−</button>
+                <input type="number" id="scaleNum" class="num-input" step="0.01" min="0.05" max="3" disabled />
+                <button type="button" class="step-btn" id="scaleInc" disabled title="+0.01">+</button>
+            </div>
+        </div>
+
+        <div id="offsetCard">
+            <div class="slider-row">
+                <label for="offX">Смещение X</label>
+                <input type="range" id="offX" min="-1000" max="1000" step="1" value="0" />
+                <div class="num-group">
+                    <button type="button" class="step-btn" id="offXDec" title="−1">−</button>
+                    <input type="number" id="offXNum" class="num-input" step="1" value="0" />
+                    <button type="button" class="step-btn" id="offXInc" title="+1">+</button>
+                </div>
+            </div>
+            <div class="slider-row">
+                <label for="offY">Смещение Y</label>
+                <input type="range" id="offY" min="-1000" max="1000" step="1" value="0" />
+                <div class="num-group">
+                    <button type="button" class="step-btn" id="offYDec" title="−1">−</button>
+                    <input type="number" id="offYNum" class="num-input" step="1" value="0" />
+                    <button type="button" class="step-btn" id="offYInc" title="+1">+</button>
+                </div>
+            </div>
+            <div class="hint">Картинка двигается внутри маски. Тяните её мышкой прямо на холсте.</div>
+        </div>
+
+        <div class="actions">
+            <button class="secondary" id="centerBtn" disabled>По центру</button>
+            <button class="secondary" id="resetBtn" disabled>Сброс (100%)</button>
+            <button class="danger" id="removeBtn" disabled>Удалить слой</button>
+        </div>
+    </div>
+
+    <div class="card">
+        <label class="row">
+            <span>Название команды</span>
+            <input type="text" id="teamName" placeholder="Например: NAVI" autocomplete="off" />
+        </label>
+        <label class="row">
+            <span>Маска для этого логотипа (необязательно)</span>
+            <select id="teamMask">
+                <option value="">— Без маски —</option>
+            </select>
+        </label>
+        <div class="status info" id="status">Ожидание названия команды…</div>
+    </div>
+
+    <div class="card">
+        <label class="row">
+            <span>Ник игрока</span>
+            <input type="text" id="playerName" placeholder="Например: s1mple" autocomplete="off" />
+        </label>
+        <label class="row">
+            <span>Маска для этого игрока (необязательно)</span>
+            <select id="playerMask">
+                <option value="">— Без маски —</option>
+            </select>
+        </label>
+        <div class="status info" id="playerStatus">Ожидание ника игрока…</div>
+    </div>
+
+    <div class="card">
+        <div class="card-title">Добавить картинку по ссылке</div>
+        <label class="row">
+            <span>URL изображения</span>
+            <input type="text" id="imageUrl" placeholder="https://example.com/image.png" autocomplete="off" />
+        </label>
+        <label class="row">
+            <span>Название слоя (необязательно)</span>
+            <input type="text" id="imageName" placeholder="Например: Фон" autocomplete="off" />
+        </label>
+        <label class="row">
+            <span>Маска — слой (необязательно)</span>
+            <select id="imageMask">
+                <option value="">— Без маски —</option>
+            </select>
+        </label>
+        <div class="actions">
+            <button class="primary" id="addImageBtn">Добавить картинку</button>
+        </div>
+        <div class="status info" id="imageStatus"></div>
+    </div>
+
+    <div class="card">
+        <div class="card-head">
+            <div class="card-title">Слои</div>
+            <div class="card-head-actions">
+                <button class="secondary icon-btn" id="upBtn" disabled title="Поднять слой выше">↑</button>
+                <button class="secondary icon-btn" id="downBtn" disabled title="Опустить слой ниже">↓</button>
+                <button class="primary" id="dupBtn" disabled>Скопировать слой</button>
+            </div>
+        </div>
+        <div class="layers-list" id="layersList">
+            <div class="empty-layers" id="emptyLayers">Пока нет слоёв</div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-title">Готовый шаблон</div>
+        <div class="hint">Сгенерирует автономный HTML: сцена с текущими слоями, масками и ролями.</div>
+        <div class="actions">
+            <button class="primary" id="previewTemplateBtn" disabled>Открыть предпросмотр</button>
+            <button class="success" id="downloadTemplateBtn" disabled>Скачать HTML</button>
+            <button class="secondary" id="copyTemplateBtn" disabled>Скопировать HTML</button>
+        </div>
+        <div class="status info" id="templateStatus"></div>
+    </div>
+
+    <div class="card">
+        <div class="card-title">Импорт HTML обратно в редактор</div>
+        <div class="hint">Вставьте HTML, сгенерированный кнопкой «Скопировать HTML» — все слои и привязки масок вернутся.</div>
+        <label class="row">
+            <span>HTML-код шаблона</span>
+            <textarea id="importHtmlText" placeholder="Вставьте сюда HTML шаблона…" autocomplete="off"></textarea>
+        </label>
+        <div class="actions">
+            <button class="primary" id="importHtmlBtn">Импортировать</button>
+            <button class="secondary" id="importHtmlFileBtn">Загрузить .html файл</button>
+            <button class="secondary" id="importHtmlClearBtn">Очистить поле</button>
+            <input type="file" id="importHtmlFileInput" accept=".html,.htm" style="display:none" />
+        </div>
+        <div class="status info" id="importHtmlStatus"></div>
+    </div>
+
+</div>
+
+<!-- ===== VIEWER ===== -->
+<div class="controls viewer-controls hidden" id="viewerControls">
+    <div class="card">
+        <div class="card-title">Управление картинками</div>
+        <div class="hint">
+            Поля для слоёв с ролью «Логотип команды», «Фото игрока» и «Картинка по URL».
+            Обрезка по маске-слою сохраняется при замене картинки.
+        </div>
+        <div id="viewerFields">
+            <div class="empty-layers">В шаблоне нет управляемых слоёв.</div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function () {
+    "use strict";
+
+    const API_URL = "https://script.google.com/macros/s/AKfycbxJZEfppSo6QZpmpiEDR1FaOpIjHdfQDXdj-x80uoIy-SU30nKgIgfvr3DNgQbroi53/exec";
+    const SHEET_ID = "188jMHUJs1KkmCAzG7XZYTnTY9SnNIx0JlXJoEdMTees";
+    const BOARD_SIZE = 1000;
+
+    const TEMPLATE_DATA = null;
+    const IS_TEMPLATE = TEMPLATE_DATA !== null;
+
+    const ROLE_LABELS = {
+        "": "Без функции",
+        "team-logo": "Логотип команды",
+        "player-photo": "Фото игрока",
+        "image-swap": "Картинка (по URL)",
+        "static": "Статичная картинка",
+    };
+
+    const $board = document.getElementById("board");
+    const $editorControls = document.getElementById("editorControls");
+    const $viewerControls = document.getElementById("viewerControls");
+
+    const $teamName = document.getElementById("teamName");
+    const $teamMask = document.getElementById("teamMask");
+    const $status = document.getElementById("status");
+    const $layersList = document.getElementById("layersList");
+    const $emptyLayers = document.getElementById("emptyLayers");
+    const $selTitle = document.getElementById("selTitle");
+    const $layerName = document.getElementById("layerName");
+    const $layerRole = document.getElementById("layerRole");
+    const $layerMask = document.getElementById("layerMask");
+
+    const $playerName = document.getElementById("playerName");
+    const $playerMask = document.getElementById("playerMask");
+    const $playerStatus = document.getElementById("playerStatus");
+
+    const $imageUrl = document.getElementById("imageUrl");
+    const $imageName = document.getElementById("imageName");
+    const $imageMask = document.getElementById("imageMask");
+    const $addImageBtn = document.getElementById("addImageBtn");
+    const $imageStatus = document.getElementById("imageStatus");
+
+    const $posX = document.getElementById("posX");
+    const $posY = document.getElementById("posY");
+    const $scale = document.getElementById("scale");
+    const $posXNum = document.getElementById("posXNum");
+    const $posYNum = document.getElementById("posYNum");
+    const $scaleNum = document.getElementById("scaleNum");
+    const $posXDec = document.getElementById("posXDec");
+    const $posXInc = document.getElementById("posXInc");
+    const $posYDec = document.getElementById("posYDec");
+    const $posYInc = document.getElementById("posYInc");
+    const $scaleDec = document.getElementById("scaleDec");
+    const $scaleInc = document.getElementById("scaleInc");
+
+    const $offsetCard = document.getElementById("offsetCard");
+    const $offX = document.getElementById("offX");
+    const $offY = document.getElementById("offY");
+    const $offXNum = document.getElementById("offXNum");
+    const $offYNum = document.getElementById("offYNum");
+    const $offXDec = document.getElementById("offXDec");
+    const $offXInc = document.getElementById("offXInc");
+    const $offYDec = document.getElementById("offYDec");
+    const $offYInc = document.getElementById("offYInc");
+
+    const $dupBtn = document.getElementById("dupBtn");
+    const $upBtn = document.getElementById("upBtn");
+    const $downBtn = document.getElementById("downBtn");
+    const $centerBtn = document.getElementById("centerBtn");
+    const $resetBtn = document.getElementById("resetBtn");
+    const $removeBtn = document.getElementById("removeBtn");
+
+    const $previewTemplateBtn = document.getElementById("previewTemplateBtn");
+    const $downloadTemplateBtn = document.getElementById("downloadTemplateBtn");
+    const $copyTemplateBtn = document.getElementById("copyTemplateBtn");
+    const $templateStatus = document.getElementById("templateStatus");
+
+    const $importHtmlText = document.getElementById("importHtmlText");
+    const $importHtmlBtn = document.getElementById("importHtmlBtn");
+    const $importHtmlFileBtn = document.getElementById("importHtmlFileBtn");
+    const $importHtmlClearBtn = document.getElementById("importHtmlClearBtn");
+    const $importHtmlFileInput = document.getElementById("importHtmlFileInput");
+    const $importHtmlStatus = document.getElementById("importHtmlStatus");
+
+    const $viewerFields = document.getElementById("viewerFields");
+
+    let layers = [];
+    let selectedId = null;
+    let nextId = 1;
+    let teamsCache = null;
+    let playersCache = null;
+    let lookupToken = 0;
+    let playerLookupToken = 0;
+    let debounceTimer = null;
+    let playerDebounceTimer = null;
+
+    function setStatus(msg, type = "info") { if (!$status) return; $status.textContent = msg; $status.className = "status " + type; }
+    function setImageStatus(msg, type = "info") { if (!$imageStatus) return; $imageStatus.textContent = msg; $imageStatus.className = "status " + type; }
+    function setPlayerStatus(msg, type = "info") { if (!$playerStatus) return; $playerStatus.textContent = msg; $playerStatus.className = "status " + type; }
+    function setTemplateStatus(msg, type = "info") { if (!$templateStatus) return; $templateStatus.textContent = msg; $templateStatus.className = "status " + type; }
+    function setImportStatus(msg, type = "info") { if (!$importHtmlStatus) return; $importHtmlStatus.textContent = msg; $importHtmlStatus.className = "status " + type; }
+    function cleanUrl(v) { return String(v ?? "").replace(/\s+\d+x$/, "").trim(); }
+    function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+
+    async function fetchSheet(sheetName) {
+        const url = new URL(API_URL);
+        url.searchParams.set("sheetId", SHEET_ID);
+        url.searchParams.set("sheetName", sheetName);
+        const res = await fetch(url);
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error || "Ошибка API");
+        return json.data;
+    }
+
+    async function loadTeams() {
+        if (teamsCache) return teamsCache;
+        const rows = await fetchSheet("TEAMS");
+        const map = new Map();
+        rows.slice(1).forEach(row => {
+            const full = String(row[0] ?? "").trim();
+            const short = String(row[1] ?? "").trim() || full;
+            const logo = cleanUrl(row[4]);
+            if (!full && !short) return;
+            const entry = { full: full || short, short, logo };
+            if (full) map.set(full.toLowerCase(), entry);
+            if (short) map.set(short.toLowerCase(), entry);
+        });
+        teamsCache = map;
+        return map;
+    }
+
+    async function loadPlayers() {
+        if (playersCache) return playersCache;
+        const rows = await fetchSheet("PLAYERS");
+        const map = new Map();
+        rows.slice(1).forEach(row => {
+            const nick = String(row[0] ?? "").trim();
+            const photo = cleanUrl(row[1]);
+            if (!nick) return;
+            map.set(nick.toLowerCase(), { nick, photo });
+        });
+        playersCache = map;
+        return map;
+    }
+
+    function getLayer(id) { return layers.find(l => l.id === id) || null; }
+    function getSelected() { return getLayer(selectedId); }
+
+    // -------- Создание слоя --------
+    function createLayer({ team = null, player = null, src, name = null, kind = "logo", role = "", maskId = null, offsetX = 0, offsetY = 0, x, y, scale, autoOffset = false }) {
+        if (!src) return null;
+        const id = nextId++;
+        const el = document.createElement("div");
+        el.className = "layer";
+        el.dataset.id = String(id);
+
+        const clip = document.createElement("div");
+        clip.className = "clip";
+        const img = document.createElement("img");
+        img.draggable = false;
+        img.alt = "";
+        clip.appendChild(img);
+        el.appendChild(clip);
+
+        const displayName = name || team || player || (kind === "image" ? "Картинка" : "Логотип");
+
+        const layer = {
+            id,
+            team,
+            player,
+            src,
+            kind,
+            role: role || "",
+            maskId: maskId || null,
+            offsetX: (typeof offsetX === "number" && isFinite(offsetX)) ? offsetX : 0,
+            offsetY: (typeof offsetY === "number" && isFinite(offsetY)) ? offsetY : 0,
+            x: (typeof x === "number" && isFinite(x)) ? x : BOARD_SIZE / 2,
+            y: (typeof y === "number" && isFinite(y)) ? y : BOARD_SIZE / 2,
+            scale: (typeof scale === "number" && isFinite(scale) && scale > 0) ? scale : 1,
+            baseW: 500,
+            baseH: 500,
+            ready: false,
+            el,
+            clipEl: clip,
+            imgEl: img,
+            name: displayName,
+        };
+
+        applyLayerTransform(layer);
+
+        img.onload = () => {
+            const nw = img.naturalWidth || 500;
+            const nh = img.naturalHeight || 500;
+            const ratio = Math.min(1, 500 / Math.max(nw, nh));
+            layer.baseW = Math.round(nw * ratio);
+            layer.baseH = Math.round(nh * ratio);
+            layer.ready = true;
+
+            if (autoOffset && layers.length > 1) {
+                const offset = 30 * (layers.length - 1);
+                layer.x += offset;
+                layer.y += offset;
+            }
+            applyLayerTransform(layer);
+            applyMaskToLayer(layer);
+            updateMaskParentStyles();
+
+            if (!IS_TEMPLATE) {
+                refreshLayerItem(layer);
+                renderLayersList();
+            }
+        };
+        img.onerror = () => {
+            if (IS_TEMPLATE) console.warn("Не удалось загрузить:", layer.src);
+            else setStatus("Не удалось загрузить картинку по ссылке", "error");
+        };
+        img.src = src;
+
+        $board.appendChild(el);
+        layers.push(layer);
+        updateZIndices();
+        applyMaskToLayer(layer);
+
+        if (IS_TEMPLATE) {
+            renderViewerFields();
+        } else {
+            renderLayersList();
+            selectLayer(id);
+            updateTemplateState();
+            refreshMaskSelects();
+            updateMaskParentStyles();
+        }
+        return layer;
+    }
+
+    function applyLayerTransform(layer) {
+        if (!layer.el) return;
+        const w = layer.baseW * layer.scale;
+        const h = layer.baseH * layer.scale;
+        layer.el.style.width = w + "px";
+        layer.el.style.height = h + "px";
+        layer.el.style.left = (layer.x - w / 2) + "px";
+        layer.el.style.top = (layer.y - h / 2) + "px";
+    }
+
+    function updateZIndices() {
+        layers.forEach((l, i) => { l.el.style.zIndex = String(i + 1); });
+    }
+
+    function setLayerSrc(layer, newSrc, { newTeam = undefined, newPlayer = undefined } = {}) {
+        if (!layer) return;
+        if (newTeam !== undefined) layer.team = newTeam;
+        if (newPlayer !== undefined) layer.player = newPlayer;
+        layer.imgEl.onload = () => {
+            const nw = layer.imgEl.naturalWidth || 500;
+            const nh = layer.imgEl.naturalHeight || 500;
+            const ratio = Math.min(1, 500 / Math.max(nw, nh));
+            layer.baseW = Math.round(nw * ratio);
+            layer.baseH = Math.round(nh * ratio);
+            applyLayerTransform(layer);
+            applyMaskToLayer(layer);
+        };
+        layer.imgEl.onerror = () => console.warn("Не удалось загрузить:", newSrc);
+        layer.imgEl.src = newSrc;
+        layer.src = newSrc;
+    }
+
+    // -------- Маска-слой --------
+    /**
+     * Слой с маской:
+     *  - сам layer по размеру совпадает с маской (центр = центр маски);
+     *  - clip внутри layer по размеру маски, overflow hidden;
+     *  - img внутри clip смещается на offsetX/offsetY (центр картинки = центр клипа + offset);
+     *  - offsetX/offsetY двигают картинку ТОЛЬКО внутри clip.
+     */
+    function applyMaskToLayer(layer) {
+        if (!layer || !layer.clipEl) return;
+        const clip = layer.clipEl;
+        // сброс
+        clip.style.position = "";
+        clip.style.left = "";
+        clip.style.top = "";
+        clip.style.width = "";
+        clip.style.height = "";
+        clip.style.overflow = "";
+        layer.imgEl.style.position = "";
+        layer.imgEl.style.left = "";
+        layer.imgEl.style.top = "";
+        layer.imgEl.style.width = "";
+        layer.imgEl.style.height = "";
+        layer.imgEl.style.objectFit = "";
+        layer.imgEl.style.transform = "";
+
+        if (!layer.maskId) return;
+        const mask = getLayer(layer.maskId);
+        if (!mask) { layer.maskId = null; return; }
+
+        const mw = mask.baseW * mask.scale;
+        const mh = mask.baseH * mask.scale;
+
+        // Слой принимает размеры и позицию маски
+        layer.x = mask.x;
+        layer.y = mask.y;
+        // baseW/baseH фиксируем под маску, scale = 1 — чтобы не масштабировать картинку дважды
+        // (сама картинка вписывается через object-fit: cover в клип)
+        layer.baseW = mask.baseW;
+        layer.baseH = mask.baseH;
+        layer.scale = mask.scale;
+        applyLayerTransform(layer);
+
+        // clip = размер маски на экране
+        clip.style.position = "absolute";
+        clip.style.left = "0";
+        clip.style.top = "0";
+        clip.style.width = mw + "px";
+        clip.style.height = mh + "px";
+        clip.style.overflow = "hidden";
+
+        // Картинка по размеру клипа + смещение через transform
+        layer.imgEl.style.position = "absolute";
+        layer.imgEl.style.left = "0";
+        layer.imgEl.style.top = "0";
+        layer.imgEl.style.width = "100%";
+        layer.imgEl.style.height = "100%";
+        layer.imgEl.style.objectFit = "cover";
+        layer.imgEl.style.transform = `translate(${layer.offsetX}px, ${layer.offsetY}px)`;
+    }
+
+    function syncChildrenOfMask(maskId) {
+        layers.forEach(l => {
+            if (l.maskId === maskId) applyMaskToLayer(l);
+        });
+    }
+
+    function updateMaskParentStyles() {
+        // подсветить слои, которые служат маской
+        const parents = new Set();
+        layers.forEach(l => { if (l.maskId) parents.add(l.maskId); });
+        layers.forEach(l => {
+            if (l.el) l.el.classList.toggle("mask-parent", parents.has(l.id));
+        });
+    }
+
+    function refreshMaskSelects() {
+        if (IS_TEMPLATE) return;
+
+        const fill = (sel, currentValue, excludeId) => {
+            const prev = currentValue;
+            sel.querySelectorAll("option").forEach(o => { if (o.value) o.remove(); });
+            layers.forEach(l => {
+                if (l.id === excludeId) return;
+                const opt = document.createElement("option");
+                opt.value = String(l.id);
+                opt.textContent = (l.kind === "image" ? "🖼 " : "🏷 ") + (l.name || `слой #${l.id}`);
+                sel.appendChild(opt);
+            });
+            const exists = [...sel.options].some(o => o.value === prev);
+            sel.value = exists ? prev : "";
+        };
+
+        const cur = getSelected();
+        fill($layerMask, $layerMask.value, cur ? cur.id : null);
+        fill($imageMask, $imageMask.value, null);
+        fill($teamMask, $teamMask.value, null);
+        fill($playerMask, $playerMask.value, null);
+
+        if (cur) $layerMask.value = cur.maskId ? String(cur.maskId) : "";
+    }
+
+    function selectLayer(id) {
+        if (IS_TEMPLATE) return;
+        const layer = getLayer(id);
+        selectedId = layer ? id : null;
+        layers.forEach(l => l.el.classList.toggle("selected", l.id === selectedId));
+        document.querySelectorAll(".layer-item").forEach(item => {
+            item.classList.toggle("selected", Number(item.dataset.id) === selectedId);
+        });
+        updateControlsState();
+        syncControlsWithSelected();
+        updateSelectedTitle();
+        refreshMaskSelects();
+        updateOffsetCard();
+    }
+
+    function updateOffsetCard() {
+        if (!$offsetCard) return;
+        const layer = getSelected();
+        const has = layer && layer.maskId;
+        $offsetCard.classList.toggle("hidden", !has);
+    }
+
+    function removeLayer(id) {
+        const layer = getLayer(id);
+        if (!layer) return;
+        layer.el.remove();
+        layers = layers.filter(l => l.id !== id);
+        layers.forEach(l => {
+            if (l.maskId === id) { l.maskId = null; applyMaskToLayer(l); }
+        });
+        if (selectedId === id) selectedId = layers.length ? layers[layers.length - 1].id : null;
+        updateZIndices();
+        renderLayersList();
+        selectLayer(selectedId);
+        updateTemplateState();
+        refreshMaskSelects();
+        updateMaskParentStyles();
+    }
+
+    function clearAllLayers() {
+        layers.forEach(l => l.el.remove());
+        layers = [];
+        selectedId = null;
+        renderLayersList();
+        selectLayer(null);
+        updateTemplateState();
+        refreshMaskSelects();
+        updateMaskParentStyles();
+    }
+
+    function moveLayerInZ(id, dir) {
+        const idx = layers.findIndex(l => l.id === id);
+        if (idx === -1) return false;
+        const target = idx + dir;
+        if (target < 0 || target >= layers.length) return false;
+        const [layer] = layers.splice(idx, 1);
+        layers.splice(target, 0, layer);
+        updateZIndices();
+        renderLayersList();
+        selectLayer(id);
+        return true;
+    }
+
+    function updateSelectedTitle() {
+        const layer = getSelected();
+        if (!layer) { $selTitle.textContent = "Настройки слоя"; return; }
+        const kindLabel = layer.kind === "image" ? "картинка" : "логотип";
+        $selTitle.textContent = `Настройки слоя: ${layer.name || kindLabel}`;
+    }
+
+    function updateControlsState() {
+        const has = !!getSelected();
+        [$posX, $posY, $scale, $posXNum, $posYNum, $scaleNum].forEach($el => { if ($el) $el.disabled = !has; });
+        [$posXDec, $posXInc, $posYDec, $posYInc, $scaleDec, $scaleInc].forEach($el => { if ($el) $el.disabled = !has; });
+        if ($centerBtn) $centerBtn.disabled = !has;
+        if ($resetBtn) $resetBtn.disabled = !has;
+        if ($removeBtn) $removeBtn.disabled = !has;
+        if ($dupBtn) $dupBtn.disabled = !has;
+        if ($layerName) $layerName.disabled = !has;
+        if ($layerRole) $layerRole.disabled = !has;
+        if ($layerMask) $layerMask.disabled = !has;
+        const idx = has ? layers.findIndex(l => l.id === selectedId) : -1;
+        if ($upBtn) $upBtn.disabled = !has || idx === layers.length - 1;
+        if ($downBtn) $downBtn.disabled = !has || idx === 0;
+        if (!has) {
+            if ($layerName) $layerName.value = "";
+            if ($layerRole) $layerRole.value = "";
+            if ($layerMask) $layerMask.value = "";
+            if ($posXNum) $posXNum.value = "";
+            if ($posYNum) $posYNum.value = "";
+            if ($scaleNum) $scaleNum.value = "";
+        }
+    }
+
+    function updateTemplateState() {
+        const has = layers.length > 0;
+        if ($previewTemplateBtn) $previewTemplateBtn.disabled = !has;
+        if ($downloadTemplateBtn) $downloadTemplateBtn.disabled = !has;
+        if ($copyTemplateBtn) $copyTemplateBtn.disabled = !has;
+    }
+
+    function syncControlsWithSelected() {
+        const layer = getSelected();
+        if (!layer) return;
+        const rx = Math.round(layer.x);
+        const ry = Math.round(layer.y);
+        if ($posX) $posX.value = rx;
+        if ($posY) $posY.value = ry;
+        if ($scale) $scale.value = layer.scale.toFixed(2);
+        if ($posXNum) $posXNum.value = rx;
+        if ($posYNum) $posYNum.value = ry;
+        if ($scaleNum) $scaleNum.value = layer.scale.toFixed(2);
+        if ($layerName) $layerName.value = layer.name || "";
+        if ($layerRole) $layerRole.value = layer.role || "";
+        if ($layerMask) $layerMask.value = layer.maskId ? String(layer.maskId) : "";
+        if ($offX) $offX.value = Math.round(layer.offsetX);
+        if ($offY) $offY.value = Math.round(layer.offsetY);
+        if ($offXNum) $offXNum.value = Math.round(layer.offsetX);
+        if ($offYNum) $offYNum.value = Math.round(layer.offsetY);
+    }
+
+    function renderLayersList() {
+        if (IS_TEMPLATE) return;
+        if (!$layersList) return;
+        $layersList.querySelectorAll(".layer-item").forEach(el => el.remove());
+        if ($emptyLayers) $emptyLayers.style.display = layers.length ? "none" : "block";
+
+        const parents = new Set();
+        layers.forEach(l => { if (l.maskId) parents.add(l.maskId); });
+
+        [...layers].reverse().forEach(layer => {
+            const item = document.createElement("div");
+            item.className = "layer-item" + (layer.id === selectedId ? " selected" : "");
+            item.dataset.id = String(layer.id);
+
+            const thumb = document.createElement("div");
+            thumb.className = "layer-thumb";
+            const timg = document.createElement("img");
+            timg.src = layer.src;
+            timg.alt = "";
+            thumb.appendChild(timg);
+
+            const meta = document.createElement("div");
+            meta.className = "layer-meta";
+            const name = document.createElement("div");
+            name.className = "layer-name";
+            name.textContent = (layer.kind === "image" ? "🖼 " : "🏷 ") + (layer.name || "слой");
+            name.title = "Двойной клик для переименования";
+            const coords = document.createElement("div");
+            coords.className = "layer-coords";
+            let coordsText = `X: ${Math.round(layer.x)} · Y: ${Math.round(layer.y)} · ${Math.round(layer.scale * 100)}%`;
+            if (layer.maskId) coordsText += ` · внутри: ${Math.round(layer.offsetX)},${Math.round(layer.offsetY)}`;
+            coords.textContent = coordsText;
+            meta.appendChild(name);
+            meta.appendChild(coords);
+
+            if (layer.role) {
+                const roleEl = document.createElement("div");
+                roleEl.className = "layer-role";
+                roleEl.textContent = ROLE_LABELS[layer.role] || layer.role;
+                meta.appendChild(roleEl);
+            }
+            if (layer.maskId) {
+                const maskEl = document.createElement("div");
+                maskEl.className = "layer-role mask-role";
+                const m = getLayer(layer.maskId);
+                maskEl.textContent = "маска: " + (m ? (m.name || `#${m.id}`) : "?");
+                meta.appendChild(maskEl);
+            }
+            if (parents.has(layer.id)) {
+                const p = document.createElement("div");
+                p.className = "layer-role mask-parent-role";
+                p.textContent = "служит маской";
+                meta.appendChild(p);
+            }
+
+            const rm = document.createElement("button");
+            rm.className = "layer-remove";
+            rm.type = "button";
+            rm.title = "Удалить слой";
+            rm.textContent = "×";
+            rm.addEventListener("click", e => { e.stopPropagation(); removeLayer(layer.id); });
+
+            item.addEventListener("click", () => selectLayer(layer.id));
+            name.addEventListener("dblclick", e => { e.stopPropagation(); startInlineRename(name, layer); });
+
+            item.appendChild(thumb);
+            item.appendChild(meta);
+            item.appendChild(rm);
+            $layersList.appendChild(item);
+        });
+
+        const has = !!getSelected();
+        const idx = has ? layers.findIndex(l => l.id === selectedId) : -1;
+        if ($upBtn) $upBtn.disabled = !has || idx === layers.length - 1;
+        if ($downBtn) $downBtn.disabled = !has || idx === 0;
+    }
+
+    function startInlineRename(nameEl, layer) {
+        if (nameEl.querySelector("input")) return;
+        const input = document.createElement("input");
+        input.type = "text";
+        input.className = "layer-name-edit";
+        input.value = layer.name || "";
+        nameEl.textContent = "";
+        nameEl.appendChild(input);
+        input.focus();
+        input.select();
+
+        let done = false;
+        function commit(save) {
+            if (done) return;
+            done = true;
+            if (save) {
+                const v = input.value.trim();
+                renameLayer(layer.id, v || (layer.kind === "image" ? "Картинка" : "Логотип"));
+            } else {
+                renderLayersList();
+            }
+        }
+        input.addEventListener("keydown", e => {
+            if (e.key === "Enter") { e.preventDefault(); commit(true); }
+            else if (e.key === "Escape") { e.preventDefault(); commit(false); }
+            e.stopPropagation();
+        });
+        input.addEventListener("click", e => e.stopPropagation());
+        input.addEventListener("blur", () => commit(true));
+    }
+
+    function renameLayer(id, newName) {
+        const layer = getLayer(id);
+        if (!layer) return;
+        const name = String(newName || "").trim();
+        if (!name) return;
+        layer.name = name;
+        if (selectedId === id) {
+            if ($layerName) $layerName.value = name;
+            updateSelectedTitle();
+        }
+        renderLayersList();
+        refreshMaskSelects();
+    }
+
+    function refreshLayerItem(layer) {
+        if (IS_TEMPLATE) return;
+        const item = $layersList && $layersList.querySelector(`.layer-item[data-id="${layer.id}"]`);
+        if (!item) return;
+        const coords = item.querySelector(".layer-coords");
+        if (coords) {
+            let coordsText = `X: ${Math.round(layer.x)} · Y: ${Math.round(layer.y)} · ${Math.round(layer.scale * 100)}%`;
+            if (layer.maskId) coordsText += ` · внутри: ${Math.round(layer.offsetX)},${Math.round(layer.offsetY)}`;
+            coords.textContent = coordsText;
+        }
+    }
+
+    async function lookupTeam(name, addAsLayer, maskId = null) {
+        const raw = name.trim();
+        if (!raw) { setStatus("Ожидание названия команды…", "info"); return; }
+        const token = ++lookupToken;
+        try {
+            const teams = await loadTeams();
+            if (token !== lookupToken) return;
+            const team = teams.get(raw.toLowerCase());
+            if (!team) { setStatus(`Команда "${raw}" не найдена в TEAMS`, "error"); return; }
+            if (!team.logo) { setStatus(`У команды "${team.full}" не указан логотип (колонка E)`, "error"); return; }
+            setStatus(`Лого: ${team.full}`, "ok");
+            if (addAsLayer) {
+                createLayer({
+                    team: team.full,
+                    src: team.logo,
+                    kind: "logo",
+                    role: "team-logo",
+                    maskId: maskId || null,
+                    autoOffset: true,
+                });
+            }
+        } catch (e) {
+            if (token !== lookupToken) return;
+            setStatus("Ошибка: " + (e && e.message ? e.message : e), "error");
+        }
+    }
+
+    async function lookupPlayer(nick, addAsLayer, maskId = null) {
+        const raw = nick.trim();
+        if (!raw) { setPlayerStatus("Ожидание ника игрока…", "info"); return; }
+        const token = ++playerLookupToken;
+        try {
+            const players = await loadPlayers();
+            if (token !== playerLookupToken) return;
+            const p = players.get(raw.toLowerCase());
+            if (!p) { setPlayerStatus(`Игрок "${raw}" не найден в PLAYERS`, "error"); return; }
+            if (!p.photo) { setPlayerStatus(`У игрока "${p.nick}" не указано фото (колонка B)`, "error"); return; }
+            setPlayerStatus(`Фото: ${p.nick}`, "ok");
+            if (addAsLayer) {
+                createLayer({
+                    player: p.nick,
+                    src: p.photo,
+                    kind: "logo",
+                    role: "player-photo",
+                    maskId: maskId || null,
+                    autoOffset: true,
+                });
+            }
+        } catch (e) {
+            if (token !== playerLookupToken) return;
+            setPlayerStatus("Ошибка: " + (e && e.message ? e.message : e), "error");
+        }
+    }
+
+    // -------- Инициализация редактора --------
+    function initEditor() {
+        $teamName.addEventListener("input", () => {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => lookupTeam($teamName.value, true, $teamMask.value ? Number($teamMask.value) : null), 350);
+        });
+        $teamName.addEventListener("keydown", e => {
+            if (e.key === "Enter") {
+                clearTimeout(debounceTimer);
+                lookupTeam($teamName.value, true, $teamMask.value ? Number($teamMask.value) : null);
+            }
+        });
+
+        $playerName.addEventListener("input", () => {
+            clearTimeout(playerDebounceTimer);
+            playerDebounceTimer = setTimeout(() => lookupPlayer($playerName.value, true, $playerMask.value ? Number($playerMask.value) : null), 350);
+        });
+        $playerName.addEventListener("keydown", e => {
+            if (e.key === "Enter") {
+                clearTimeout(playerDebounceTimer);
+                lookupPlayer($playerName.value, true, $playerMask.value ? Number($playerMask.value) : null);
+            }
+        });
+
+        $dupBtn.addEventListener("click", () => {
+            const src = getSelected();
+            if (!src) return;
+            createLayer({
+                team: src.team, player: src.player, src: src.src, name: src.name + " (копия)",
+                kind: src.kind, role: src.role, maskId: src.maskId,
+                offsetX: src.offsetX, offsetY: src.offsetY,
+                x: src.x + 30, y: src.y + 30, scale: src.scale,
+            });
+            setStatus(`Слой скопирован: ${src.name}`, "ok");
+        });
+
+        $upBtn.addEventListener("click", () => {
+            if (selectedId && moveLayerInZ(selectedId, +1)) setStatus("Слой поднят выше", "info");
+        });
+        $downBtn.addEventListener("click", () => {
+            if (selectedId && moveLayerInZ(selectedId, -1)) setStatus("Слой опущен ниже", "info");
+        });
+
+        function addImageLayer() {
+            const url = $imageUrl.value.trim();
+            const name = $imageName.value.trim();
+            const maskVal = $imageMask.value;
+            if (!url) { setImageStatus("Введите URL изображения", "error"); $imageUrl.focus(); return; }
+            if (!/^https?:\/\//i.test(url)) { setImageStatus("Ссылка должна начинаться с http:// или https://", "error"); return; }
+            setImageStatus("Загрузка изображения…", "info");
+            const layer = createLayer({
+                src: url,
+                name: name || "Картинка",
+                kind: "image",
+                role: "image-swap",
+                maskId: maskVal ? Number(maskVal) : null,
+            });
+            if (layer) {
+                if (maskVal) applyMaskToLayer(layer);
+                setImageStatus(`Добавлен слой: ${layer.name}`, "ok");
+                $imageUrl.value = "";
+                $imageName.value = "";
+            }
+        }
+        $addImageBtn.addEventListener("click", addImageLayer);
+        $imageUrl.addEventListener("keydown", e => { if (e.key === "Enter") addImageLayer(); });
+        $imageName.addEventListener("keydown", e => { if (e.key === "Enter") addImageLayer(); });
+
+        $layerName.addEventListener("input", () => {
+            const layer = getSelected();
+            if (!layer) return;
+            const v = $layerName.value.trim();
+            if (v) {
+                layer.name = v;
+                updateSelectedTitle();
+                const item = $layersList.querySelector(`.layer-item[data-id="${layer.id}"]`);
+                if (item) {
+                    const nameEl = item.querySelector(".layer-name");
+                    if (nameEl && !nameEl.querySelector("input")) {
+                        nameEl.textContent = (layer.kind === "image" ? "🖼 " : "🏷 ") + layer.name;
+                    }
+                }
+            }
+        });
+        $layerName.addEventListener("blur", () => {
+            const layer = getSelected();
+            if (!layer) return;
+            const v = $layerName.value.trim();
+            const fallback = layer.kind === "image" ? "Картинка" : "Логотип";
+            layer.name = v || fallback;
+            $layerName.value = layer.name;
+            updateSelectedTitle();
+            renderLayersList();
+            refreshMaskSelects();
+        });
+
+        $layerRole.addEventListener("change", () => {
+            const layer = getSelected();
+            if (!layer) return;
+            layer.role = $layerRole.value || "";
+            renderLayersList();
+            setStatus(`Роль слоя: ${ROLE_LABELS[layer.role] || "—"}`, "info");
+        });
+
+        $layerMask.addEventListener("change", () => {
+            const layer = getSelected();
+            if (!layer) return;
+            const newId = $layerMask.value ? Number($layerMask.value) : null;
+            if (newId === layer.id) {
+                $layerMask.value = layer.maskId ? String(layer.maskId) : "";
+                return;
+            }
+            if (newId) {
+                let cursor = getLayer(newId);
+                let guard = 0;
+                while (cursor && cursor.maskId && guard++ < 50) {
+                    if (cursor.maskId === layer.id) {
+                        setStatus("Циклическая маска — отменено", "error");
+                        $layerMask.value = layer.maskId ? String(layer.maskId) : "";
+                        return;
+                    }
+                    cursor = getLayer(cursor.maskId);
+                }
+            }
+            layer.maskId = newId;
+            if (newId) {
+                // сбрасываем offset, чтобы было предсказуемо
+                layer.offsetX = 0;
+                layer.offsetY = 0;
+            }
+            applyMaskToLayer(layer);
+            renderLayersList();
+            updateOffsetCard();
+            syncControlsWithSelected();
+            updateMaskParentStyles();
+            setStatus(`Маска слоя: ${newId ? (getLayer(newId)?.name || "#" + newId) : "—"}`, "info");
+        });
+
+        function applyX(v) {
+            const l = getSelected(); if (!l) return;
+            if (l.maskId) {
+                // слой с маской не двигается вручную — двигаем саму маску
+                const mask = getLayer(l.maskId);
+                if (mask) {
+                    mask.x = v;
+                    applyLayerTransform(mask);
+                    applyMaskToLayer(l);
+                    syncChildrenOfMask(mask.id);
+                    if (selectedId === mask.id) {} // никаких рекурсий
+                }
+            } else {
+                l.x = v;
+                applyLayerTransform(l);
+                syncChildrenOfMask(l.id);
+            }
+            $posX.value = clamp(v, -1000, 2000);
+            $posXNum.value = Math.round(v);
+            refreshLayerItem(l);
+        }
+        function applyY(v) {
+            const l = getSelected(); if (!l) return;
+            if (l.maskId) {
+                const mask = getLayer(l.maskId);
+                if (mask) {
+                    mask.y = v;
+                    applyLayerTransform(mask);
+                    applyMaskToLayer(l);
+                    syncChildrenOfMask(mask.id);
+                }
+            } else {
+                l.y = v;
+                applyLayerTransform(l);
+                syncChildrenOfMask(l.id);
+            }
+            $posY.value = clamp(v, -1000, 2000);
+            $posYNum.value = Math.round(v);
+            refreshLayerItem(l);
+        }
+        function applyScale(v) {
+            const l = getSelected(); if (!l) return;
+            v = clamp(v, 0.05, 3);
+            if (l.maskId) {
+                const mask = getLayer(l.maskId);
+                if (mask) {
+                    mask.scale = v;
+                    applyLayerTransform(mask);
+                    applyMaskToLayer(l);
+                    syncChildrenOfMask(mask.id);
+                }
+            } else {
+                l.scale = v;
+                applyLayerTransform(l);
+                applyMaskToLayer(l);
+                syncChildrenOfMask(l.id);
+            }
+            $scale.value = v.toFixed(2);
+            $scaleNum.value = v.toFixed(2);
+            refreshLayerItem(l);
+        }
+        function applyOffsetX(v) {
+            const l = getSelected(); if (!l || !l.maskId) return;
+            l.offsetX = v;
+            applyMaskToLayer(l);
+            if ($offX) $offX.value = Math.round(v);
+            if ($offXNum) $offXNum.value = Math.round(v);
+            refreshLayerItem(l);
+        }
+        function applyOffsetY(v) {
+            const l = getSelected(); if (!l || !l.maskId) return;
+            l.offsetY = v;
+            applyMaskToLayer(l);
+            if ($offY) $offY.value = Math.round(v);
+            if ($offYNum) $offYNum.value = Math.round(v);
+            refreshLayerItem(l);
+        }
+
+        $posX.addEventListener("input", () => applyX(parseFloat($posX.value)));
+        $posY.addEventListener("input", () => applyY(parseFloat($posY.value)));
+        $scale.addEventListener("input", () => applyScale(parseFloat($scale.value)));
+        $posXNum.addEventListener("input", () => { const v = parseFloat($posXNum.value); if (!Number.isNaN(v)) applyX(v); });
+        $posYNum.addEventListener("input", () => { const v = parseFloat($posYNum.value); if (!Number.isNaN(v)) applyY(v); });
+        $scaleNum.addEventListener("input", () => { const v = parseFloat($scaleNum.value); if (!Number.isNaN(v)) applyScale(v); });
+        $posXNum.addEventListener("blur", () => syncControlsWithSelected());
+        $posYNum.addEventListener("blur", () => syncControlsWithSelected());
+        $scaleNum.addEventListener("blur", () => syncControlsWithSelected());
+
+        $offX.addEventListener("input", () => applyOffsetX(parseFloat($offX.value)));
+        $offY.addEventListener("input", () => applyOffsetY(parseFloat($offY.value)));
+        $offXNum.addEventListener("input", () => { const v = parseFloat($offXNum.value); if (!Number.isNaN(v)) applyOffsetX(v); });
+        $offYNum.addEventListener("input", () => { const v = parseFloat($offYNum.value); if (!Number.isNaN(v)) applyOffsetY(v); });
+        $offXNum.addEventListener("blur", () => syncControlsWithSelected());
+        $offYNum.addEventListener("blur", () => syncControlsWithSelected());
+
+        $posXDec.addEventListener("click", () => { const l = getSelected(); if (!l) return; applyX(Math.round(l.x) - 1); });
+        $posXInc.addEventListener("click", () => { const l = getSelected(); if (!l) return; applyX(Math.round(l.x) + 1); });
+        $posYDec.addEventListener("click", () => { const l = getSelected(); if (!l) return; applyY(Math.round(l.y) - 1); });
+        $posYInc.addEventListener("click", () => { const l = getSelected(); if (!l) return; applyY(Math.round(l.y) + 1); });
+        $scaleDec.addEventListener("click", () => { const l = getSelected(); if (!l) return; applyScale(Math.round((l.scale - 0.01) * 100) / 100); });
+        $scaleInc.addEventListener("click", () => { const l = getSelected(); if (!l) return; applyScale(Math.round((l.scale + 0.01) * 100) / 100); });
+        $offXDec.addEventListener("click", () => { const l = getSelected(); if (!l) return; applyOffsetX(Math.round(l.offsetX) - 1); });
+        $offXInc.addEventListener("click", () => { const l = getSelected(); if (!l) return; applyOffsetX(Math.round(l.offsetX) + 1); });
+        $offYDec.addEventListener("click", () => { const l = getSelected(); if (!l) return; applyOffsetY(Math.round(l.offsetY) - 1); });
+        $offYInc.addEventListener("click", () => { const l = getSelected(); if (!l) return; applyOffsetY(Math.round(l.offsetY) + 1); });
+
+        $centerBtn.addEventListener("click", () => {
+            const l = getSelected(); if (!l) return;
+            if (l.maskId) {
+                const mask = getLayer(l.maskId);
+                if (mask) {
+                    mask.x = BOARD_SIZE / 2;
+                    mask.y = BOARD_SIZE / 2;
+                    applyLayerTransform(mask);
+                    applyMaskToLayer(l);
+                    syncChildrenOfMask(mask.id);
+                }
+            } else {
+                l.x = BOARD_SIZE / 2; l.y = BOARD_SIZE / 2;
+                applyLayerTransform(l);
+                syncChildrenOfMask(l.id);
+            }
+            syncControlsWithSelected();
+            refreshLayerItem(l);
+        });
+        $resetBtn.addEventListener("click", () => {
+            const l = getSelected(); if (!l) return;
+            if (l.maskId) {
+                l.offsetX = 0;
+                l.offsetY = 0;
+                applyMaskToLayer(l);
+                syncControlsWithSelected();
+                refreshLayerItem(l);
+            } else {
+                l.scale = 1;
+                applyLayerTransform(l);
+                applyMaskToLayer(l);
+                syncChildrenOfMask(l.id);
+                syncControlsWithSelected();
+                refreshLayerItem(l);
+            }
+        });
+        $removeBtn.addEventListener("click", () => {
+            const l = getSelected(); if (!l) return;
+            removeLayer(l.id);
+        });
+
+        installBoardGestures();
+
+        $previewTemplateBtn.addEventListener("click", () => {
+            try {
+                const html = buildTemplateHtml();
+                const w = window.open("", "_blank");
+                if (!w) { setTemplateStatus("Всплывающее окно заблокировано — разрешите popup", "error"); return; }
+                w.document.open();
+                w.document.write(html);
+                w.document.close();
+                setTemplateStatus("Предпросмотр открыт в новой вкладке", "ok");
+            } catch (e) {
+                setTemplateStatus("Ошибка: " + (e && e.message ? e.message : e), "error");
+            }
+        });
+        $downloadTemplateBtn.addEventListener("click", () => {
+            try {
+                const html = buildTemplateHtml();
+                const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+                a.href = url;
+                a.download = `scene-template-${stamp}.html`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 2000);
+                setTemplateStatus("Файл сохранён", "ok");
+            } catch (e) {
+                setTemplateStatus("Ошибка: " + (e && e.message ? e.message : e), "error");
+            }
+        });
+        $copyTemplateBtn.addEventListener("click", async () => {
+            try {
+                const html = buildTemplateHtml();
+                await navigator.clipboard.writeText(html);
+                setTemplateStatus("HTML скопирован в буфер обмена", "ok");
+            } catch (e) {
+                setTemplateStatus("Не удалось скопировать: " + (e && e.message ? e.message : e), "error");
+            }
+        });
+
+        $importHtmlBtn.addEventListener("click", () => {
+            const html = $importHtmlText.value;
+            if (!html.trim()) { setImportStatus("Вставьте HTML-код шаблона", "error"); return; }
+            importFromHtmlString(html);
+        });
+        $importHtmlClearBtn.addEventListener("click", () => {
+            $importHtmlText.value = "";
+            setImportStatus("", "info");
+        });
+        $importHtmlFileBtn.addEventListener("click", () => $importHtmlFileInput.click());
+        $importHtmlFileInput.addEventListener("change", async () => {
+            const file = $importHtmlFileInput.files && $importHtmlFileInput.files[0];
+            $importHtmlFileInput.value = "";
+            if (!file) return;
+            try {
+                const text = await file.text();
+                $importHtmlText.value = text;
+                importFromHtmlString(text);
+            } catch (e) {
+                setImportStatus("Не удалось прочитать файл: " + (e && e.message ? e.message : e), "error");
+            }
+        });
+
+        updateControlsState();
+        renderLayersList();
+        updateTemplateState();
+        refreshMaskSelects();
+        updateOffsetCard();
+    }
+
+    function installBoardGestures() {
+        const pointers = new Map();
+        let drag = null;
+
+        function boardPoint(clientX, clientY) {
+            const r = $board.getBoundingClientRect();
+            return {
+                x: (clientX - r.left) / r.width * BOARD_SIZE,
+                y: (clientY - r.top) / r.height * BOARD_SIZE,
+            };
+        }
+        function hitLayerAt(clientX, clientY) {
+            const r = $board.getBoundingClientRect();
+            for (let i = layers.length - 1; i >= 0; i--) {
+                const l = layers[i];
+                const w = l.baseW * l.scale;
+                const h = l.baseH * l.scale;
+                const left = r.left + (l.x - w / 2) / BOARD_SIZE * r.width;
+                const top = r.top + (l.y - h / 2) / BOARD_SIZE * r.height;
+                const right = left + w / BOARD_SIZE * r.width;
+                const bottom = top + h / BOARD_SIZE * r.height;
+                if (clientX >= left && clientX <= right && clientY >= top && clientY <= bottom) return l;
+            }
+            return null;
+        }
+        /**
+         * Возвращает true, если клиентская точка попала в ВИДИМУЮ часть маскированного слоя
+         * (то есть в clip). Нужно, чтобы отличить «двигаем картинку внутри» от «двигаем весь слой».
+         */
+        function isPointInClip(layer, clientX, clientY) {
+            if (!layer.maskId) return false;
+            const mask = getLayer(layer.maskId);
+            if (!mask) return false;
+            const r = $board.getBoundingClientRect();
+            const mw = mask.baseW * mask.scale;
+            const mh = mask.baseH * mask.scale;
+            const left = r.left + (mask.x - mw / 2) / BOARD_SIZE * r.width;
+            const top = r.top + (mask.y - mh / 2) / BOARD_SIZE * r.height;
+            const right = left + mw / BOARD_SIZE * r.width;
+            const bottom = top + mh / BOARD_SIZE * r.height;
+            return clientX >= left && clientX <= right && clientY >= top && clientY <= bottom;
+        }
+
+        $board.addEventListener("pointerdown", e => {
+            if (IS_TEMPLATE || layers.length === 0) return;
+            const hit = hitLayerAt(e.clientX, e.clientY);
+            if (!hit) return;
+            selectLayer(hit.id);
+            $board.setPointerCapture(e.pointerId);
+            pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+            $board.classList.add("dragging");
+            startGesture(hit, e.clientX, e.clientY);
+        });
+        $board.addEventListener("pointermove", e => {
+            if (!pointers.has(e.pointerId) || !drag) return;
+            pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+            updateGesture();
+        });
+        function endPointer(e) {
+            pointers.delete(e.pointerId);
+            if (pointers.size === 0) { drag = null; $board.classList.remove("dragging"); }
+            else startGesture(getSelected(), 0, 0);
+        }
+        $board.addEventListener("pointerup", endPointer);
+        $board.addEventListener("pointercancel", endPointer);
+
+        function startGesture(layer, cx, cy) {
+            const pts = [...pointers.values()];
+            const midClient = {
+                x: pts.reduce((s, p) => s + p.x, 0) / pts.length,
+                y: pts.reduce((s, p) => s + p.y, 0) / pts.length,
+            };
+            const mid = boardPoint(midClient.x, midClient.y);
+            const dist = pts.length >= 2 ? Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) : 1;
+
+            let insideClip = false;
+            if (layer && layer.maskId && cx && cy) {
+                insideClip = isPointInClip(layer, cx, cy);
+            }
+
+            drag = {
+                layerId: layer ? layer.id : null,
+                insideClip,
+                startX: layer ? layer.x : 0,
+                startY: layer ? layer.y : 0,
+                startOffsetX: layer ? layer.offsetX : 0,
+                startOffsetY: layer ? layer.offsetY : 0,
+                startScale: layer ? layer.scale : 1,
+                startMid: mid, startDist: dist,
+            };
+        }
+        function updateGesture() {
+            const layer = drag ? getLayer(drag.layerId) : null;
+            if (!layer) return;
+            const pts = [...pointers.values()];
+            const midClient = {
+                x: pts.reduce((s, p) => s + p.x, 0) / pts.length,
+                y: pts.reduce((s, p) => s + p.y, 0) / pts.length,
+            };
+            const mid = boardPoint(midClient.x, midClient.y);
+            const dx = mid.x - drag.startMid.x;
+            const dy = mid.y - drag.startMid.y;
+
+            if (drag.insideClip && layer.maskId) {
+                // двигаем картинку ВНУТРИ клипа
+                layer.offsetX = drag.startOffsetX + dx;
+                layer.offsetY = drag.startOffsetY + dy;
+                applyMaskToLayer(layer);
+                if ($offX) $offX.value = Math.round(layer.offsetX);
+                if ($offY) $offY.value = Math.round(layer.offsetY);
+                if ($offXNum) $offXNum.value = Math.round(layer.offsetX);
+                if ($offYNum) $offYNum.value = Math.round(layer.offsetY);
+                refreshLayerItem(layer);
+                return;
+            }
+
+            // иначе двигаем сам слой (и маску, если есть)
+            if (layer.maskId) {
+                const mask = getLayer(layer.maskId);
+                if (mask) {
+                    mask.x = drag.startX + dx;
+                    mask.y = drag.startY + dy;
+                    applyLayerTransform(mask);
+                    applyMaskToLayer(layer);
+                    syncChildrenOfMask(mask.id);
+                }
+            } else {
+                layer.x = drag.startX + dx;
+                layer.y = drag.startY + dy;
+                applyLayerTransform(layer);
+                syncChildrenOfMask(layer.id);
+            }
+            syncControlsWithSelected();
+            refreshLayerItem(layer);
+        }
+
+        $board.addEventListener("wheel", e => {
+            if (IS_TEMPLATE) return;
+            const hit = hitLayerAt(e.clientX, e.clientY);
+            if (!hit) return;
+            e.preventDefault();
+            if (hit.id !== selectedId) selectLayer(hit.id);
+            const layer = getLayer(hit.id);
+            const factor = Math.exp(-e.deltaY * 0.0015);
+            // Alt (или Shift) — масштаб КАРТИНКИ внутри клипа, без модификатора — масштаб слоя/маски
+            const zoomInside = e.altKey || e.shiftKey;
+
+            if (hit.maskId && zoomInside) {
+                // масштабируем картинку внутри: увеличиваем размер img относительно клипа
+                // реализуем через offset + transform scale — здесь просто скорректируем offset,
+                // чтобы масштаб ощущался как «вокруг курсора»; но для простоты и надёжности
+                // меняем размер картинки через transform scale к слою
+                if (!layer._imgScale) layer._imgScale = 1;
+                layer._imgScale = clamp(layer._imgScale * factor, 0.2, 5);
+                layer.imgEl.style.transformOrigin = "center center";
+                layer.imgEl.style.transform =
+                    `translate(${layer.offsetX}px, ${layer.offsetY}px) scale(${layer._imgScale})`;
+                return;
+            }
+
+            const p = boardPoint(e.clientX, e.clientY);
+            const newScale = clamp(hit.scale * factor, 0.05, 3);
+            const k = newScale / hit.scale;
+
+            if (hit.maskId) {
+                const mask = getLayer(hit.maskId);
+                if (mask) {
+                    mask.x = p.x + (mask.x - p.x) * k;
+                    mask.y = p.y + (mask.y - p.y) * k;
+                    mask.scale = newScale;
+                    applyLayerTransform(mask);
+                    applyMaskToLayer(layer);
+                    syncChildrenOfMask(mask.id);
+                }
+            } else {
+                hit.x = p.x + (hit.x - p.x) * k;
+                hit.y = p.y + (hit.y - p.y) * k;
+                hit.scale = newScale;
+                applyLayerTransform(hit);
+                syncChildrenOfMask(hit.id);
+            }
+            syncControlsWithSelected();
+            refreshLayerItem(layer);
+        }, { passive: false });
+    }
+
+    // -------- Сериализация --------
+    function serializeLayers() {
+        return layers.map(l => ({
+            src: l.src, kind: l.kind, role: l.role || "",
+            name: l.name || "", team: l.team || "", player: l.player || "",
+            maskId: l.maskId || null,
+            offsetX: Math.round(l.offsetX * 100) / 100,
+            offsetY: Math.round(l.offsetY * 100) / 100,
+            x: Math.round(l.x * 100) / 100,
+            y: Math.round(l.y * 100) / 100,
+            scale: Math.round(l.scale * 1000) / 1000,
+        }));
+    }
+
+    function buildTemplateHtml() {
+        const data = JSON.stringify(serializeLayers());
+        const docClone = document.documentElement.cloneNode(true);
+        const scripts = docClone.querySelectorAll("script");
+        let patched = false;
+        scripts.forEach(sc => {
+            if (patched) return;
+            const txt = sc.textContent || "";
+            if (txt.includes("const TEMPLATE_DATA = ")) {
+                sc.textContent = txt.replace(
+                    /const TEMPLATE_DATA = [^;]*;/,
+                    `const TEMPLATE_DATA = ${data};`
+                );
+                patched = true;
+            }
+        });
+        if (!patched) throw new Error("Не удалось найти блок TEMPLATE_DATA в исходнике");
+
+        const titleEl = docClone.querySelector("title");
+        if (titleEl) titleEl.textContent = "Шаблон сцены";
+
+        return "<!doctype html>\n" + docClone.outerHTML;
+    }
+
+    // -------- Импорт --------
+    function extractLayersFromHtml(html) {
+        const src = String(html);
+        const marker = "const TEMPLATE_DATA = ";
+        const s = src.indexOf(marker);
+        if (s === -1) throw new Error("В коде не найдена строка TEMPLATE_DATA");
+        const start = s + marker.length;
+        let i = start;
+        while (i < src.length && src[i] !== "[" && src[i] !== "{") i++;
+        if (i >= src.length) throw new Error("Не найден массив слоёв");
+        const openChar = src[i];
+        const closeChar = openChar === "[" ? "]" : "}";
+        let depth = 0, inStr = false, quote = "", esc = false, end = -1;
+        for (let j = i; j < src.length; j++) {
+            const c = src[j];
+            if (inStr) {
+                if (esc) { esc = false; continue; }
+                if (c === "\\") { esc = true; continue; }
+                if (c === quote) { inStr = false; quote = ""; }
+                continue;
+            }
+            if (c === '"' || c === "'") { inStr = true; quote = c; continue; }
+            if (c === openChar) depth++;
+            else if (c === closeChar) { depth--; if (depth === 0) { end = j; break; } }
+        }
+        if (end === -1) throw new Error("Не удалось найти конец массива слоёв");
+        const raw = src.slice(i, end + 1);
+        let parsed;
+        try { parsed = JSON.parse(raw); }
+        catch (e) {
+            try { parsed = new Function("return (" + raw + ");")(); }
+            catch (e2) { throw new Error("Не удалось распарсить данные: " + (e.message || e)); }
+        }
+        if (Array.isArray(parsed)) return parsed;
+        if (parsed && Array.isArray(parsed.layers)) return parsed.layers;
+        throw new Error("Неизвестный формат данных");
+    }
+
+    function importFromHtmlString(html) {
+        try {
+            const arr = extractLayersFromHtml(html);
+            if (!arr.length) { setImportStatus("В шаблоне нет слоёв", "error"); return; }
+
+            const has = layers.length > 0;
+            const replace = has
+                ? confirm(`Заменить текущую сцену (${layers.length}) на ${arr.length} из шаблона?\nOK — заменить, Отмена — добавить в конец.`)
+                : true;
+            if (replace) clearAllLayers();
+
+            // Первый проход: создаём без масок
+            const created = [];
+            arr.forEach(item => {
+                if (!item || !item.src) return;
+                const l = createLayer({
+                    src: String(item.src),
+                    kind: item.kind === "image" ? "image" : "logo",
+                    role: String(item.role || ""),
+                    name: String(item.name || "").trim() || null,
+                    team: String(item.team || "").trim() || null,
+                    player: String(item.player || "").trim() || null,
+                    offsetX: Number(item.offsetX) || 0,
+                    offsetY: Number(item.offsetY) || 0,
+                    x: Number(item.x),
+                    y: Number(item.y),
+                    scale: Number(item.scale),
+                    autoOffset: false,
+                });
+                if (l) created.push({ srcItem: item, layer: l });
+            });
+
+            // Второй проход: связываем маски
+            created.forEach(({ srcItem, layer }) => {
+                if (!srcItem.maskId) return;
+                const maskSrc = arr.find(x => x && String(x.id) === String(srcItem.maskId));
+                if (maskSrc) {
+                    const maskCreated = created.find(c => c.srcItem === maskSrc);
+                    if (maskCreated && maskCreated.layer.id !== layer.id) {
+                        layer.maskId = maskCreated.layer.id;
+                        applyMaskToLayer(layer);
+                    }
+                }
+            });
+
+            updateMaskParentStyles();
+            setImportStatus(`Импортировано слоёв: ${created.length}`, "ok");
+            updateTemplateState();
+            refreshMaskSelects();
+        } catch (e) {
+            setImportStatus("Ошибка импорта: " + (e && e.message ? e.message : e), "error");
+        }
+    }
+
+    // -------- Viewer --------
+    function renderViewerFields() {
+        if (!IS_TEMPLATE || !$viewerFields) return;
+        $viewerFields.innerHTML = "";
+        const managed = layers.filter(l => l.role === "team-logo" || l.role === "player-photo" || l.role === "image-swap");
+        if (!managed.length) {
+            const d = document.createElement("div");
+            d.className = "empty-layers";
+            d.textContent = "В шаблоне нет управляемых слоёв.";
+            $viewerFields.appendChild(d);
+            return;
+        }
+        managed.forEach(layer => {
+            if (layer.role === "team-logo") $viewerFields.appendChild(buildTeamLogoField(layer));
+            else if (layer.role === "player-photo") $viewerFields.appendChild(buildPlayerPhotoField(layer));
+            else if (layer.role === "image-swap") $viewerFields.appendChild(buildImageSwapField(layer));
+        });
+    }
+
+    function buildTeamLogoField(layer) {
+        const group = document.createElement("div");
+        group.className = "field-group";
+        const label = document.createElement("label");
+        label.textContent = `Логотип: ${layer.name}`;
+        group.appendChild(label);
+        const rowInline = document.createElement("div");
+        rowInline.className = "row-inline";
+        const input = document.createElement("input");
+        input.type = "text";
+        input.placeholder = "Название команды (например, NAVI)";
+        input.autocomplete = "off";
+        if (layer.team) input.value = layer.team;
+        const btn = document.createElement("button");
+        btn.type = "button"; btn.className = "primary"; btn.textContent = "Применить";
+        rowInline.appendChild(input); rowInline.appendChild(btn);
+        group.appendChild(rowInline);
+        const fb = document.createElement("div"); fb.className = "fb info"; group.appendChild(fb);
+
+        let token = 0;
+        async function applyTeam() {
+            const raw = input.value.trim();
+            if (!raw) { fb.className = "fb error"; fb.textContent = "Введите название"; return; }
+            const myToken = ++token;
+            fb.className = "fb info"; fb.textContent = "Ищу команду…";
+            try {
+                const teams = await loadTeams();
+                if (myToken !== token) return;
+                const team = teams.get(raw.toLowerCase());
+                if (!team) { fb.className = "fb error"; fb.textContent = `Команда "${raw}" не найдена`; return; }
+                if (!team.logo) { fb.className = "fb error"; fb.textContent = `У команды "${team.full}" нет логотипа`; return; }
+                setLayerSrc(layer, team.logo, { newTeam: team.full });
+                fb.className = "fb ok"; fb.textContent = `Установлено: ${team.full}`;
+            } catch (e) {
+                if (myToken !== token) return;
+                fb.className = "fb error"; fb.textContent = "Ошибка: " + (e && e.message ? e.message : e);
+            }
+        }
+        btn.addEventListener("click", applyTeam);
+        input.addEventListener("keydown", e => { if (e.key === "Enter") applyTeam(); });
+        if (layer.team) setTimeout(applyTeam, 0);
+        return group;
+    }
+
+    function buildPlayerPhotoField(layer) {
+        const group = document.createElement("div");
+        group.className = "field-group";
+        const label = document.createElement("label");
+        label.textContent = `Фото игрока: ${layer.name}`;
+        group.appendChild(label);
+        const rowInline = document.createElement("div");
+        rowInline.className = "row-inline";
+        const input = document.createElement("input");
+        input.type = "text";
+        input.placeholder = "Ник игрока (например, s1mple)";
+        input.autocomplete = "off";
+        if (layer.player) input.value = layer.player;
+        const btn = document.createElement("button");
+        btn.type = "button"; btn.className = "primary"; btn.textContent = "Применить";
+        rowInline.appendChild(input); rowInline.appendChild(btn);
+        group.appendChild(rowInline);
+        const fb = document.createElement("div"); fb.className = "fb info"; group.appendChild(fb);
+
+        let token = 0;
+        async function applyPlayer() {
+            const raw = input.value.trim();
+            if (!raw) { fb.className = "fb error"; fb.textContent = "Введите ник"; return; }
+            const myToken = ++token;
+            fb.className = "fb info"; fb.textContent = "Ищу игрока…";
+            try {
+                const players = await loadPlayers();
+                if (myToken !== token) return;
+                const p = players.get(raw.toLowerCase());
+                if (!p) { fb.className = "fb error"; fb.textContent = `Игрок "${raw}" не найден`; return; }
+                if (!p.photo) { fb.className = "fb error"; fb.textContent = `У игрока "${p.nick}" нет фото`; return; }
+                setLayerSrc(layer, p.photo, { newPlayer: p.nick });
+                fb.className = "fb ok"; fb.textContent = `Установлено: ${p.nick}`;
+            } catch (e) {
+                if (myToken !== token) return;
+                fb.className = "fb error"; fb.textContent = "Ошибка: " + (e && e.message ? e.message : e);
+            }
+        }
+        btn.addEventListener("click", applyPlayer);
+        input.addEventListener("keydown", e => { if (e.key === "Enter") applyPlayer(); });
+        if (layer.player) setTimeout(applyPlayer, 0);
+        return group;
+    }
+
+    function buildImageSwapField(layer) {
+        const group = document.createElement("div");
+        group.className = "field-group";
+        const label = document.createElement("label");
+        label.textContent = `Картинка: ${layer.name}`;
+        group.appendChild(label);
+        const rowInline = document.createElement("div");
+        rowInline.className = "row-inline";
+        const input = document.createElement("input");
+        input.type = "text";
+        input.placeholder = "https://example.com/new-image.png";
+        input.autocomplete = "off";
+        const btn = document.createElement("button");
+        btn.type = "button"; btn.className = "primary"; btn.textContent = "Заменить";
+        rowInline.appendChild(input); rowInline.appendChild(btn);
+        group.appendChild(rowInline);
+        const fb = document.createElement("div"); fb.className = "fb info"; group.appendChild(fb);
+
+        function applyUrl() {
+            const url = input.value.trim();
+            if (!url) { fb.className = "fb error"; fb.textContent = "Введите URL"; return; }
+            if (!/^https?:\/\//i.test(url)) { fb.className = "fb error"; fb.textContent = "Ссылка должна начинаться с http(s)://"; return; }
+            setLayerSrc(layer, url);
+            fb.className = "fb ok"; fb.textContent = "Картинка заменена";
+        }
+        btn.addEventListener("click", applyUrl);
+        input.addEventListener("keydown", e => { if (e.key === "Enter") applyUrl(); });
+        return group;
+    }
+
+    // -------- Старт --------
+    if (IS_TEMPLATE) {
+        $board.classList.add("viewer");
+        if ($editorControls) $editorControls.classList.add("hidden");
+        if ($viewerControls) $viewerControls.classList.remove("hidden");
+
+        const arr = Array.isArray(TEMPLATE_DATA) ? TEMPLATE_DATA : (TEMPLATE_DATA?.layers || []);
+        const created = [];
+        arr.forEach(item => {
+            if (!item || !item.src) return;
+            const l = createLayer({
+                src: item.src,
+                kind: item.kind,
+                role: item.role,
+                name: item.name,
+                team: item.team,
+                player: item.player,
+                offsetX: Number(item.offsetX) || 0,
+                offsetY: Number(item.offsetY) || 0,
+                x: Number(item.x),
+                y: Number(item.y),
+                scale: Number(item.scale),
+                autoOffset: false,
+            });
+            if (l) created.push({ srcItem: item, layer: l });
+        });
+
+        created.forEach(({ srcItem, layer }) => {
+            if (srcItem.maskId) {
+                const maskSrc = arr.find(x => x && String(x.id) === String(srcItem.maskId));
+                if (maskSrc) {
+                    const maskCreated = created.find(c => c.srcItem === maskSrc);
+                    if (maskCreated && maskCreated.layer.id !== layer.id) {
+                        layer.maskId = maskCreated.layer.id;
+                        applyMaskToLayer(layer);
+                    }
+                }
+            }
+        });
+
+        updateMaskParentStyles();
+        renderViewerFields();
+    } else {
+        initEditor();
+    }
+})();
+</script>
+
+</body>
+</html>
