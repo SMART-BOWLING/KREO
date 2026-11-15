@@ -377,7 +377,7 @@
         </div>
         <div class="hint">
             Клик — выделить один. Ctrl/Cmd+клик — добавить/убрать из выделения.
-            Shift+клик — выделить диапазон. Выделенные слои можно перетаскивать группой.
+            Shift+клик — выделить диапазон. При мультивыборе поля X/Y/Масштаб применяются ко всем выделенным.
         </div>
         <div class="layers-list" id="layersList">
             <div class="empty-layers" id="emptyLayers">Пока нет слоёв</div>
@@ -579,6 +579,11 @@
     function getLayer(id) { return layers.find(l => l.id === id) || null; }
     function getPrimary() { return getLayer(primaryId); }
 
+    function getSelectedLayers() {
+        return selectedIds.map(id => getLayer(id)).filter(Boolean);
+    }
+
+    // -------- Создание слоя --------
     function createLayer({ team = null, player = null, src, name = null, kind = "logo", role = "", maskId = null, offsetX = 0, offsetY = 0, x, y, scale, autoOffset = false, selectAfter = true }) {
         if (!src) return null;
         const id = nextId++;
@@ -815,7 +820,7 @@
     function updateOffsetCard() {
         if (!$offsetCard) return;
         const layer = getPrimary();
-        const has = layer && layer.maskId;
+        const has = selectedIds.length === 1 && layer && layer.maskId;
         $offsetCard.classList.toggle("hidden", !has);
     }
 
@@ -889,23 +894,36 @@
     }
 
     function updateControlsState() {
-        const has = selectedIds.length === 1 && !!getPrimary();
-        [$posX, $posY, $scale, $posXNum, $posYNum, $scaleNum].forEach($el => { if ($el) $el.disabled = !has; });
-        [$posXDec, $posXInc, $posYDec, $posYInc, $scaleDec, $scaleInc].forEach($el => { if ($el) $el.disabled = !has; });
-        if ($centerBtn) $centerBtn.disabled = !has;
-        if ($resetBtn) $resetBtn.disabled = !has;
-        if ($removeBtn) $removeBtn.disabled = !has;
-        if ($layerName) $layerName.disabled = !has;
-        if ($layerRole) $layerRole.disabled = !has;
-        if ($layerMask) $layerMask.disabled = !has;
+        const hasAny = selectedIds.length > 0;
+        const hasOne = selectedIds.length === 1 && !!getPrimary();
 
-        if ($dupBtn) $dupBtn.disabled = selectedIds.length === 0;
-        if ($removeSelectedBtn) $removeSelectedBtn.disabled = selectedIds.length === 0;
+        // Поля, которые доступны и при мультивыборе (применяются ко всем)
+        [$posX, $posY, $posXNum, $posYNum].forEach($el => { if ($el) $el.disabled = !hasAny; });
+        [$posXDec, $posXInc, $posYDec, $posYInc].forEach($el => { if ($el) $el.disabled = !hasAny; });
 
-        const idx = has ? layers.findIndex(l => l.id === primaryId) : -1;
-        if ($upBtn) $upBtn.disabled = !has || idx === layers.length - 1;
-        if ($downBtn) $downBtn.disabled = !has || idx === 0;
-        if (!has) {
+        if ($scale) $scale.disabled = !hasAny;
+        if ($scaleNum) $scaleNum.disabled = !hasAny;
+        if ($scaleDec) $scaleDec.disabled = !hasAny;
+        if ($scaleInc) $scaleInc.disabled = !hasAny;
+
+        // Кнопки «по центру»/«сброс» — тоже доступны для мультивыбора
+        if ($centerBtn) $centerBtn.disabled = !hasAny;
+        if ($resetBtn) $resetBtn.disabled = !hasAny;
+        if ($removeBtn) $removeBtn.disabled = !hasAny;
+
+        // Поля, доступные только при одиночном выборе
+        if ($layerName) $layerName.disabled = !hasOne;
+        if ($layerRole) $layerRole.disabled = !hasOne;
+        if ($layerMask) $layerMask.disabled = !hasOne;
+
+        if ($dupBtn) $dupBtn.disabled = !hasAny;
+        if ($removeSelectedBtn) $removeSelectedBtn.disabled = !hasAny;
+
+        const idx = hasOne ? layers.findIndex(l => l.id === primaryId) : -1;
+        if ($upBtn) $upBtn.disabled = !hasOne || idx === layers.length - 1;
+        if ($downBtn) $downBtn.disabled = !hasOne || idx === 0;
+
+        if (!hasAny) {
             if ($layerName) $layerName.value = "";
             if ($layerRole) $layerRole.value = "";
             if ($layerMask) $layerMask.value = "";
@@ -1018,10 +1036,10 @@
             $layersList.appendChild(item);
         });
 
-        const has = selectedIds.length === 1 && !!getPrimary();
-        const idx = has ? layers.findIndex(l => l.id === primaryId) : -1;
-        if ($upBtn) $upBtn.disabled = !has || idx === layers.length - 1;
-        if ($downBtn) $downBtn.disabled = !has || idx === 0;
+        const hasOne = selectedIds.length === 1 && !!getPrimary();
+        const idx = hasOne ? layers.findIndex(l => l.id === primaryId) : -1;
+        if ($upBtn) $upBtn.disabled = !hasOne || idx === layers.length - 1;
+        if ($downBtn) $downBtn.disabled = !hasOne || idx === 0;
     }
 
     function startInlineRename(nameEl, layer) {
@@ -1270,7 +1288,103 @@
             setStatus(`Маска слоя: ${newId ? (getLayer(newId)?.name || "#" + newId) : "—"}`, "info");
         });
 
+        // ---------- МУЛЬТИРЕДАКТИРОВАНИЕ X / Y / SCALE ----------
+        function applyXToAll(v) {
+            v = clamp(v, -1000, 2000);
+            const sel = getSelectedLayers();
+            if (!sel.length) return;
+            // Для слоя с маской X меняет маску, а не сам слой
+            const processedMasks = new Set();
+            sel.forEach(l => {
+                if (l.maskId) {
+                    if (processedMasks.has(l.maskId)) return;
+                    if (sel.some(x => x.id === l.maskId)) return; // маска сама в выделении — её подвинет свой шаг
+                    const mask = getLayer(l.maskId);
+                    if (mask) {
+                        processedMasks.add(l.maskId);
+                        mask.x = v;
+                        applyLayerTransform(mask);
+                        syncChildrenOfMask(mask.id);
+                    }
+                } else {
+                    l.x = v;
+                    applyLayerTransform(l);
+                    syncChildrenOfMask(l.id);
+                }
+            });
+            // Если маска сама в выделении — ей тоже ставим X
+            sel.forEach(l => {
+                if (!l.maskId) return; // маски-«родители» уже обрабатываются как слои без maskId, если сами не в маске
+            });
+            // Отдельно пройдёмся по тем, кто служит маской и сам выделен — им тоже поставить X
+            sel.forEach(l => {
+                // «маска-родитель» — это слой без maskId, у которого есть дети.
+                // Он уже обработан в ветке else выше. Ничего не делаем.
+            });
+
+            if ($posX) $posX.value = v;
+            if ($posXNum) $posXNum.value = Math.round(v);
+            sel.forEach(l => refreshLayerItem(l));
+        }
+
+        function applyYToAll(v) {
+            v = clamp(v, -1000, 2000);
+            const sel = getSelectedLayers();
+            if (!sel.length) return;
+            const processedMasks = new Set();
+            sel.forEach(l => {
+                if (l.maskId) {
+                    if (processedMasks.has(l.maskId)) return;
+                    if (sel.some(x => x.id === l.maskId)) return;
+                    const mask = getLayer(l.maskId);
+                    if (mask) {
+                        processedMasks.add(l.maskId);
+                        mask.y = v;
+                        applyLayerTransform(mask);
+                        syncChildrenOfMask(mask.id);
+                    }
+                } else {
+                    l.y = v;
+                    applyLayerTransform(l);
+                    syncChildrenOfMask(l.id);
+                }
+            });
+            if ($posY) $posY.value = v;
+            if ($posYNum) $posYNum.value = Math.round(v);
+            sel.forEach(l => refreshLayerItem(l));
+        }
+
+        function applyScaleToAll(v) {
+            v = clamp(v, 0.05, 3);
+            const sel = getSelectedLayers();
+            if (!sel.length) return;
+            const processedMasks = new Set();
+            sel.forEach(l => {
+                if (l.maskId) {
+                    if (processedMasks.has(l.maskId)) return;
+                    if (sel.some(x => x.id === l.maskId)) return;
+                    const mask = getLayer(l.maskId);
+                    if (mask) {
+                        processedMasks.add(l.maskId);
+                        mask.scale = v;
+                        applyLayerTransform(mask);
+                        syncChildrenOfMask(mask.id);
+                    }
+                } else {
+                    l.scale = v;
+                    applyLayerTransform(l);
+                    applyMaskToLayer(l);
+                    syncChildrenOfMask(l.id);
+                }
+            });
+            if ($scale) $scale.value = v.toFixed(2);
+            if ($scaleNum) $scaleNum.value = v.toFixed(2);
+            sel.forEach(l => refreshLayerItem(l));
+        }
+
+        // одиночное применение — если выбран 1, работает точечно; если много — ко всем
         function applyX(v) {
+            if (selectedIds.length > 1) return applyXToAll(v);
             const l = getPrimary(); if (!l) return;
             if (l.maskId) {
                 const mask = getLayer(l.maskId);
@@ -1283,6 +1397,7 @@
             refreshLayerItem(l);
         }
         function applyY(v) {
+            if (selectedIds.length > 1) return applyYToAll(v);
             const l = getPrimary(); if (!l) return;
             if (l.maskId) {
                 const mask = getLayer(l.maskId);
@@ -1295,6 +1410,7 @@
             refreshLayerItem(l);
         }
         function applyScale(v) {
+            if (selectedIds.length > 1) return applyScaleToAll(v);
             const l = getPrimary(); if (!l) return;
             v = clamp(v, 0.05, 3);
             if (l.maskId) {
@@ -1341,18 +1457,73 @@
         $offXNum.addEventListener("blur", () => syncControlsWithSelected());
         $offYNum.addEventListener("blur", () => syncControlsWithSelected());
 
-        $posXDec.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyX(Math.round(l.x) - 1); });
-        $posXInc.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyX(Math.round(l.x) + 1); });
-        $posYDec.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyY(Math.round(l.y) - 1); });
-        $posYInc.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyY(Math.round(l.y) + 1); });
-        $scaleDec.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyScale(Math.round((l.scale - 0.01) * 100) / 100); });
-        $scaleInc.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyScale(Math.round((l.scale + 0.01) * 100) / 100); });
+        $posXDec.addEventListener("click", () => {
+            if (selectedIds.length > 1) {
+                const l = getPrimary(); if (!l) return;
+                applyXToAll(l.x - 1);
+                return;
+            }
+            const l = getPrimary(); if (!l) return;
+            applyX(Math.round(l.x) - 1);
+        });
+        $posXInc.addEventListener("click", () => {
+            if (selectedIds.length > 1) {
+                const l = getPrimary(); if (!l) return;
+                applyXToAll(l.x + 1);
+                return;
+            }
+            const l = getPrimary(); if (!l) return;
+            applyX(Math.round(l.x) + 1);
+        });
+        $posYDec.addEventListener("click", () => {
+            if (selectedIds.length > 1) {
+                const l = getPrimary(); if (!l) return;
+                applyYToAll(l.y - 1);
+                return;
+            }
+            const l = getPrimary(); if (!l) return;
+            applyY(Math.round(l.y) - 1);
+        });
+        $posYInc.addEventListener("click", () => {
+            if (selectedIds.length > 1) {
+                const l = getPrimary(); if (!l) return;
+                applyYToAll(l.y + 1);
+                return;
+            }
+            const l = getPrimary(); if (!l) return;
+            applyY(Math.round(l.y) + 1);
+        });
+        $scaleDec.addEventListener("click", () => {
+            if (selectedIds.length > 1) {
+                const l = getPrimary(); if (!l) return;
+                applyScaleToAll(Math.round((l.scale - 0.01) * 100) / 100);
+                return;
+            }
+            const l = getPrimary(); if (!l) return;
+            applyScale(Math.round((l.scale - 0.01) * 100) / 100);
+        });
+        $scaleInc.addEventListener("click", () => {
+            if (selectedIds.length > 1) {
+                const l = getPrimary(); if (!l) return;
+                applyScaleToAll(Math.round((l.scale + 0.01) * 100) / 100);
+                return;
+            }
+            const l = getPrimary(); if (!l) return;
+            applyScale(Math.round((l.scale + 0.01) * 100) / 100);
+        });
         $offXDec.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyOffsetX(Math.round(l.offsetX) - 1); });
         $offXInc.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyOffsetX(Math.round(l.offsetX) + 1); });
         $offYDec.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyOffsetY(Math.round(l.offsetY) - 1); });
         $offYInc.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyOffsetY(Math.round(l.offsetY) + 1); });
 
         $centerBtn.addEventListener("click", () => {
+            const sel = getSelectedLayers();
+            if (!sel.length) return;
+            if (sel.length > 1) {
+                applyXToAll(BOARD_SIZE / 2);
+                applyYToAll(BOARD_SIZE / 2);
+                return;
+            }
             const l = getPrimary(); if (!l) return;
             if (l.maskId) {
                 const mask = getLayer(l.maskId);
@@ -1365,6 +1536,7 @@
             refreshLayerItem(l);
         });
         $resetBtn.addEventListener("click", () => {
+            if (selectedIds.length > 1) { applyScaleToAll(1); return; }
             const l = getPrimary(); if (!l) return;
             if (l.maskId) { l.offsetX = 0; l.offsetY = 0; applyMaskToLayer(l); }
             else { l.scale = 1; applyLayerTransform(l); applyMaskToLayer(l); syncChildrenOfMask(l.id); }
@@ -1372,6 +1544,11 @@
             refreshLayerItem(l);
         });
         $removeBtn.addEventListener("click", () => {
+            if (selectedIds.length > 1) {
+                if (!confirm(`Удалить ${selectedIds.length} слой(ёв)?`)) return;
+                removeSelected();
+                return;
+            }
             const l = getPrimary(); if (!l) return;
             removeLayer(l.id);
         });
@@ -1512,13 +1689,6 @@
         $board.addEventListener("pointerup", endPointer);
         $board.addEventListener("pointercancel", endPointer);
 
-        /**
-         * Запоминаем «двигаемые цели» — по одной на каждый выделенный слой:
-         *  - если у слоя нет маски — двигать сам слой;
-         *  - если есть маска и она НЕ в выделении — двигать эту маску (её дети переедут через applyMaskToLayer);
-         *  - если маска в выделении — пропускаем, её подвинет свой собственный шаг.
-         * Одинаковые маски дедуплицируем, чтобы избежать задвоения.
-         */
         function buildDragTargets() {
             const byMaskId = new Set();
             const targets = [];
@@ -1526,7 +1696,7 @@
                 const l = getLayer(id);
                 if (!l) return;
                 if (l.maskId) {
-                    if (selectedIds.includes(l.maskId)) return; // маска сама в выделении
+                    if (selectedIds.includes(l.maskId)) return;
                     if (byMaskId.has(l.maskId)) return;
                     const mask = getLayer(l.maskId);
                     if (!mask) return;
@@ -1549,15 +1719,12 @@
             const dist = pts.length >= 2 ? Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) : 1;
 
             const insideClip = layer && layer.maskId && cx && cy ? isPointInClip(layer, cx, cy) : false;
-
-            // Одиночный слой с маской и «внутри»: двигаем offset
             const singleWithMaskInside = selectedIds.length === 1 && layer && layer.maskId && insideClip;
 
             const targets = singleWithMaskInside
                 ? [{ obj: layer, isMask: false }]
                 : buildDragTargets();
 
-            // сохраняем стартовые позиции целевых объектов
             const starts = targets.map(t => ({
                 obj: t.obj,
                 startX: t.obj.x,
@@ -1589,7 +1756,6 @@
             const dx = mid.x - drag.startMid.x;
             const dy = mid.y - drag.startMid.y;
 
-            // Одиночный слой с маской и «внутри клипа» — сдвигаем offset'ы картинки
             if (drag.singleWithMaskInside) {
                 layer.offsetX = drag.startOffsetX + dx;
                 layer.offsetY = drag.startOffsetY + dy;
@@ -1602,7 +1768,6 @@
                 return;
             }
 
-            // Пиinch (масштаб) работает только при одиночном выделении без маски или для маски
             if (pts.length >= 2 && selectedIds.length === 1) {
                 const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
                 const factor = dist / drag.startDist;
@@ -1622,7 +1787,6 @@
                 }
             }
 
-            // Применяем dx/dy КО ВСЕМ целевым объектам — единый ΔX/ΔY
             drag.starts.forEach(st => {
                 const o = st.obj;
                 if (!o) return;
