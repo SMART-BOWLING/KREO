@@ -377,7 +377,7 @@
         </div>
         <div class="hint">
             Клик — выделить один. Ctrl/Cmd+клик — добавить/убрать из выделения.
-            Shift+клик — выделить диапазон.
+            Shift+клик — выделить диапазон. Выделенные слои можно перетаскивать группой.
         </div>
         <div class="layers-list" id="layersList">
             <div class="empty-layers" id="emptyLayers">Пока нет слоёв</div>
@@ -516,8 +516,8 @@
     const $viewerFields = document.getElementById("viewerFields");
 
     let layers = [];
-    let selectedIds = [];   // мультивыбор
-    let primaryId = null;   // «главный» выделенный (для панели настроек)
+    let selectedIds = [];
+    let primaryId = null;
     let nextId = 1;
     let teamsCache = null;
     let playersCache = null;
@@ -525,7 +525,7 @@
     let playerLookupToken = 0;
     let debounceTimer = null;
     let playerDebounceTimer = null;
-    let lastClickedIndex = -1; // для Shift+клика
+    let lastClickedIndex = -1;
 
     function setStatus(msg, type = "info") { if (!$status) return; $status.textContent = msg; $status.className = "status " + type; }
     function setImageStatus(msg, type = "info") { if (!$imageStatus) return; $imageStatus.textContent = msg; $imageStatus.className = "status " + type; }
@@ -579,7 +579,6 @@
     function getLayer(id) { return layers.find(l => l.id === id) || null; }
     function getPrimary() { return getLayer(primaryId); }
 
-    // -------- Создание слоя --------
     function createLayer({ team = null, player = null, src, name = null, kind = "logo", role = "", maskId = null, offsetX = 0, offsetY = 0, x, y, scale, autoOffset = false, selectAfter = true }) {
         if (!src) return null;
         const id = nextId++;
@@ -687,7 +686,6 @@
         layer.src = newSrc;
     }
 
-    // -------- Маска-слой --------
     function applyMaskToLayer(layer) {
         if (!layer || !layer.clipEl) return;
         const clip = layer.clipEl;
@@ -770,34 +768,24 @@
         if (cur) $layerMask.value = cur.maskId ? String(cur.maskId) : "";
     }
 
-    // -------- Мультивыбор --------
     function setSelection(ids, primary = null) {
-        // ids — массив id
         selectedIds = ids.slice();
-        if (ids.length === 0) {
-            primaryId = null;
-        } else if (primary !== null && ids.includes(primary)) {
-            primaryId = primary;
-        } else {
-            primaryId = ids[ids.length - 1];
-        }
-        // подсветка на холсте
+        if (ids.length === 0) primaryId = null;
+        else if (primary !== null && ids.includes(primary)) primaryId = primary;
+        else primaryId = ids[ids.length - 1];
+
         layers.forEach(l => {
             const isSel = selectedIds.includes(l.id);
             l.el.classList.toggle("selected", isSel);
             l.el.classList.toggle("selected-primary", l.id === primaryId);
         });
-        // подсветка в списке
         document.querySelectorAll(".layer-item").forEach(item => {
             const id = Number(item.dataset.id);
             const isSel = selectedIds.includes(id);
             item.classList.toggle("selected", isSel);
             item.classList.toggle("selected-primary", id === primaryId);
         });
-        // индекс для Shift+клика
-        if (primaryId !== null) {
-            lastClickedIndex = layers.findIndex(l => l.id === primaryId);
-        }
+        if (primaryId !== null) lastClickedIndex = layers.findIndex(l => l.id === primaryId);
         updateControlsState();
         syncControlsWithSelected();
         updateSelectedTitle();
@@ -893,10 +881,7 @@
 
     function updateSelectedTitle() {
         if (selectedIds.length === 0) { $selTitle.textContent = "Настройки слоя"; return; }
-        if (selectedIds.length > 1) {
-            $selTitle.textContent = `Выделено слоёв: ${selectedIds.length}`;
-            return;
-        }
+        if (selectedIds.length > 1) { $selTitle.textContent = `Выделено слоёв: ${selectedIds.length}`; return; }
         const layer = getPrimary();
         if (!layer) { $selTitle.textContent = "Настройки слоя"; return; }
         const kindLabel = layer.kind === "image" ? "картинка" : "логотип";
@@ -904,9 +889,7 @@
     }
 
     function updateControlsState() {
-        const multi = selectedIds.length > 1;
         const has = selectedIds.length === 1 && !!getPrimary();
-
         [$posX, $posY, $scale, $posXNum, $posYNum, $scaleNum].forEach($el => { if ($el) $el.disabled = !has; });
         [$posXDec, $posXInc, $posYDec, $posYInc, $scaleDec, $scaleInc].forEach($el => { if ($el) $el.disabled = !has; });
         if ($centerBtn) $centerBtn.disabled = !has;
@@ -978,8 +961,7 @@
             const thumb = document.createElement("div");
             thumb.className = "layer-thumb";
             const timg = document.createElement("img");
-            timg.src = layer.src;
-            timg.alt = "";
+            timg.src = layer.src; timg.alt = "";
             thumb.appendChild(timg);
 
             const meta = document.createElement("div");
@@ -990,9 +972,9 @@
             name.title = "Двойной клик для переименования";
             const coords = document.createElement("div");
             coords.className = "layer-coords";
-            let coordsText = `X: ${Math.round(layer.x)} · Y: ${Math.round(layer.y)} · ${Math.round(layer.scale * 100)}%`;
-            if (layer.maskId) coordsText += ` · внутри: ${Math.round(layer.offsetX)},${Math.round(layer.offsetY)}`;
-            coords.textContent = coordsText;
+            let t = `X: ${Math.round(layer.x)} · Y: ${Math.round(layer.y)} · ${Math.round(layer.scale * 100)}%`;
+            if (layer.maskId) t += ` · внутри: ${Math.round(layer.offsetX)},${Math.round(layer.offsetY)}`;
+            coords.textContent = t;
             meta.appendChild(name);
             meta.appendChild(coords);
 
@@ -1024,13 +1006,9 @@
             rm.addEventListener("click", e => { e.stopPropagation(); removeLayer(layer.id); });
 
             item.addEventListener("click", e => {
-                if (e.shiftKey) {
-                    rangeSelectionTo(layer.id);
-                } else if (e.ctrlKey || e.metaKey) {
-                    toggleInSelection(layer.id);
-                } else {
-                    setSelection([layer.id], layer.id);
-                }
+                if (e.shiftKey) rangeSelectionTo(layer.id);
+                else if (e.ctrlKey || e.metaKey) toggleInSelection(layer.id);
+                else setSelection([layer.id], layer.id);
             });
             name.addEventListener("dblclick", e => { e.stopPropagation(); startInlineRename(name, layer); });
 
@@ -1054,8 +1032,7 @@
         input.value = layer.name || "";
         nameEl.textContent = "";
         nameEl.appendChild(input);
-        input.focus();
-        input.select();
+        input.focus(); input.select();
 
         let done = false;
         function commit(save) {
@@ -1064,9 +1041,7 @@
             if (save) {
                 const v = input.value.trim();
                 renameLayer(layer.id, v || (layer.kind === "image" ? "Картинка" : "Логотип"));
-            } else {
-                renderLayersList();
-            }
+            } else renderLayersList();
         }
         input.addEventListener("keydown", e => {
             if (e.key === "Enter") { e.preventDefault(); commit(true); }
@@ -1114,12 +1089,7 @@
             if (!team) { setStatus(`Команда "${raw}" не найдена в TEAMS`, "error"); return; }
             if (!team.logo) { setStatus(`У команды "${team.full}" не указан логотип (колонка E)`, "error"); return; }
             setStatus(`Лого: ${team.full}`, "ok");
-            if (addAsLayer) {
-                createLayer({
-                    team: team.full, src: team.logo, kind: "logo", role: "team-logo",
-                    maskId: maskId || null, autoOffset: true,
-                });
-            }
+            if (addAsLayer) createLayer({ team: team.full, src: team.logo, kind: "logo", role: "team-logo", maskId: maskId || null, autoOffset: true });
         } catch (e) {
             if (token !== lookupToken) return;
             setStatus("Ошибка: " + (e && e.message ? e.message : e), "error");
@@ -1137,52 +1107,30 @@
             if (!p) { setPlayerStatus(`Игрок "${raw}" не найден в PLAYERS`, "error"); return; }
             if (!p.photo) { setPlayerStatus(`У игрока "${p.nick}" не указано фото (колонка B)`, "error"); return; }
             setPlayerStatus(`Фото: ${p.nick}`, "ok");
-            if (addAsLayer) {
-                createLayer({
-                    player: p.nick, src: p.photo, kind: "logo", role: "player-photo",
-                    maskId: maskId || null, autoOffset: true,
-                });
-            }
+            if (addAsLayer) createLayer({ player: p.nick, src: p.photo, kind: "logo", role: "player-photo", maskId: maskId || null, autoOffset: true });
         } catch (e) {
             if (token !== playerLookupToken) return;
             setPlayerStatus("Ошибка: " + (e && e.message ? e.message : e), "error");
         }
     }
 
-    // -------- Дублирование выделенных --------
-    /**
-     * Копирует выбранные слои с точно теми же координатами, что у исходников.
-     * Внутри группы маски остаются связанными: если слой A служит маской для B,
-     * и оба выбраны — копия B будет привязана к копии A, а не к оригиналу A.
-     * Если маска не входит в выборку, копия остаётся привязанной к исходной маске.
-     */
     function duplicateSelected() {
         if (!selectedIds.length) return;
-        // сохраняем порядок слоёв (снизу вверх), чтобы z-index копий был как у оригиналов
         const orderedIds = layers.map(l => l.id).filter(id => selectedIds.includes(id));
-        const oldToNew = new Map(); // oldId -> newLayer
+        const oldToNew = new Map();
 
         orderedIds.forEach(oldId => {
             const orig = getLayer(oldId);
             if (!orig) return;
-            // maskId: если маска в выборке — привязываем к копии маски (создадим после),
-            // временно оставляем null, свяжем на втором проходе.
             const maskInSelection = orig.maskId && selectedIds.includes(orig.maskId);
             const copy = createLayer({
-                team: orig.team,
-                player: orig.player,
-                src: orig.src,
+                team: orig.team, player: orig.player, src: orig.src,
                 name: orig.name ? orig.name + " (копия)" : null,
-                kind: orig.kind,
-                role: orig.role,
+                kind: orig.kind, role: orig.role,
                 maskId: maskInSelection ? null : orig.maskId,
-                offsetX: orig.offsetX,
-                offsetY: orig.offsetY,
-                x: orig.x,  // те же координаты, что у исходника
-                y: orig.y,
-                scale: orig.scale,
-                autoOffset: false,
-                selectAfter: false,
+                offsetX: orig.offsetX, offsetY: orig.offsetY,
+                x: orig.x, y: orig.y, scale: orig.scale,
+                autoOffset: false, selectAfter: false,
             });
             if (copy) {
                 copy._origMaskId = orig.maskId || null;
@@ -1190,8 +1138,7 @@
             }
         });
 
-        // связать маски внутри копий
-        oldToNew.forEach((copy, oldId) => {
+        oldToNew.forEach(copy => {
             if (copy._origMaskId && oldToNew.has(copy._origMaskId)) {
                 copy.maskId = oldToNew.get(copy._origMaskId).id;
                 applyMaskToLayer(copy);
@@ -1199,12 +1146,10 @@
             delete copy._origMaskId;
         });
 
-        // выделяем копии
         const newIds = Array.from(oldToNew.values()).map(c => c.id);
         if (newIds.length) {
             setSelection(newIds, newIds[newIds.length - 1]);
             setStatus(`Скопировано слоёв: ${newIds.length}`, "ok");
-            // поднять копии на верх? нет — оставляем z-index как при создании (сверху)
             updateZIndices();
             renderLayersList();
         }
@@ -1255,8 +1200,7 @@
             });
             if (layer) {
                 setImageStatus(`Добавлен слой: ${layer.name}`, "ok");
-                $imageUrl.value = "";
-                $imageName.value = "";
+                $imageUrl.value = ""; $imageName.value = "";
             }
         }
         $addImageBtn.addEventListener("click", addImageLayer);
@@ -1303,10 +1247,7 @@
             const layer = getPrimary();
             if (!layer) return;
             const newId = $layerMask.value ? Number($layerMask.value) : null;
-            if (newId === layer.id) {
-                $layerMask.value = layer.maskId ? String(layer.maskId) : "";
-                return;
-            }
+            if (newId === layer.id) { $layerMask.value = layer.maskId ? String(layer.maskId) : ""; return; }
             if (newId) {
                 let cursor = getLayer(newId);
                 let guard = 0;
@@ -1418,8 +1359,7 @@
                 if (mask) { mask.x = BOARD_SIZE / 2; mask.y = BOARD_SIZE / 2; applyLayerTransform(mask); applyMaskToLayer(l); syncChildrenOfMask(mask.id); }
             } else {
                 l.x = BOARD_SIZE / 2; l.y = BOARD_SIZE / 2;
-                applyLayerTransform(l);
-                syncChildrenOfMask(l.id);
+                applyLayerTransform(l); syncChildrenOfMask(l.id);
             }
             syncControlsWithSelected();
             refreshLayerItem(l);
@@ -1498,9 +1438,6 @@
             }
         });
 
-        // Ctrl/Cmd + клик по холсту добавляет/убирает из выделения
-        // (простые клики/перетаскивания обрабатываются installBoardGestures)
-
         updateControlsState();
         renderLayersList();
         updateTemplateState();
@@ -1508,6 +1445,7 @@
         updateOffsetCard();
     }
 
+    // ============ ЖЕСТЫ ============
     function installBoardGestures() {
         const pointers = new Map();
         let drag = null;
@@ -1552,17 +1490,9 @@
             const hit = hitLayerAt(e.clientX, e.clientY);
             if (!hit) return;
 
-            if (e.shiftKey) {
-                // Shift по холсту: диапазон
-                rangeSelectionTo(hit.id);
-            } else if (e.ctrlKey || e.metaKey) {
-                // Ctrl/Cmd: toggle
-                toggleInSelection(hit.id);
-                return;
-            } else {
-                // одиночный выбор
-                setSelection([hit.id], hit.id);
-            }
+            if (e.shiftKey) rangeSelectionTo(hit.id);
+            else if (e.ctrlKey || e.metaKey) { toggleInSelection(hit.id); return; }
+            else setSelection([hit.id], hit.id);
 
             $board.setPointerCapture(e.pointerId);
             pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -1582,6 +1512,33 @@
         $board.addEventListener("pointerup", endPointer);
         $board.addEventListener("pointercancel", endPointer);
 
+        /**
+         * Запоминаем «двигаемые цели» — по одной на каждый выделенный слой:
+         *  - если у слоя нет маски — двигать сам слой;
+         *  - если есть маска и она НЕ в выделении — двигать эту маску (её дети переедут через applyMaskToLayer);
+         *  - если маска в выделении — пропускаем, её подвинет свой собственный шаг.
+         * Одинаковые маски дедуплицируем, чтобы избежать задвоения.
+         */
+        function buildDragTargets() {
+            const byMaskId = new Set();
+            const targets = [];
+            selectedIds.forEach(id => {
+                const l = getLayer(id);
+                if (!l) return;
+                if (l.maskId) {
+                    if (selectedIds.includes(l.maskId)) return; // маска сама в выделении
+                    if (byMaskId.has(l.maskId)) return;
+                    const mask = getLayer(l.maskId);
+                    if (!mask) return;
+                    byMaskId.add(l.maskId);
+                    targets.push({ obj: mask, isMask: true });
+                } else {
+                    targets.push({ obj: l, isMask: false });
+                }
+            });
+            return targets;
+        }
+
         function startGesture(layer, cx, cy) {
             const pts = [...pointers.values()];
             const midClient = {
@@ -1591,32 +1548,35 @@
             const mid = boardPoint(midClient.x, midClient.y);
             const dist = pts.length >= 2 ? Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) : 1;
 
-            let insideClip = false;
-            if (layer && layer.maskId && cx && cy) insideClip = isPointInClip(layer, cx, cy);
+            const insideClip = layer && layer.maskId && cx && cy ? isPointInClip(layer, cx, cy) : false;
 
-            // стартовые позиции для всех выделенных (для группового перетаскивания)
-            const starts = selectedIds.map(id => {
-                const l = getLayer(id);
-                if (!l) return null;
-                return {
-                    id,
-                    startX: l.x, startY: l.y,
-                    startOffsetX: l.offsetX, startOffsetY: l.offsetY,
-                };
-            }).filter(Boolean);
+            // Одиночный слой с маской и «внутри»: двигаем offset
+            const singleWithMaskInside = selectedIds.length === 1 && layer && layer.maskId && insideClip;
+
+            const targets = singleWithMaskInside
+                ? [{ obj: layer, isMask: false }]
+                : buildDragTargets();
+
+            // сохраняем стартовые позиции целевых объектов
+            const starts = targets.map(t => ({
+                obj: t.obj,
+                startX: t.obj.x,
+                startY: t.obj.y,
+            }));
 
             drag = {
                 layerId: layer ? layer.id : null,
                 insideClip,
-                startX: layer ? layer.x : 0,
-                startY: layer ? layer.y : 0,
+                singleWithMaskInside,
                 startOffsetX: layer ? layer.offsetX : 0,
                 startOffsetY: layer ? layer.offsetY : 0,
                 startScale: layer ? layer.scale : 1,
-                startMid: mid, startDist: dist,
-                starts, // для группового перемещения
+                startMid: mid,
+                startDist: dist,
+                starts,
             };
         }
+
         function updateGesture() {
             const layer = drag ? getLayer(drag.layerId) : null;
             if (!layer) return;
@@ -1629,8 +1589,8 @@
             const dx = mid.x - drag.startMid.x;
             const dy = mid.y - drag.startMid.y;
 
-            // Если двигаем одиночный слой с маской и внутри клипа — сдвиг offset'ов
-            if (drag.insideClip && layer.maskId && selectedIds.length === 1) {
+            // Одиночный слой с маской и «внутри клипа» — сдвигаем offset'ы картинки
+            if (drag.singleWithMaskInside) {
                 layer.offsetX = drag.startOffsetX + dx;
                 layer.offsetY = drag.startOffsetY + dy;
                 applyMaskToLayer(layer);
@@ -1642,91 +1602,35 @@
                 return;
             }
 
-            // Групповое перемещение: двигаем все выделенные. Для слоя с маской
-            // двигаем маску (если маска тоже в выделении — двигаем только её, чтобы не задвоить).
-            const usedMasks = new Set();
-            drag.starts.forEach(st => {
-                const l = getLayer(st.id);
-                if (!l) return;
-                if (l.maskId) {
-                    const mask = getLayer(l.maskId);
-                    if (mask) {
-                        if (usedMasks.has(mask.id)) {
-                            // маску уже двигали — только пересчитываем клип
-                            applyMaskToLayer(l);
-                        } else {
-                            usedMasks.add(mask.id);
-                            // Если маска тоже выделена — её подвинет свой цикл
-                            if (!selectedIds.includes(mask.id)) {
-                                mask.x = (mask.x - layer.x) + (drag.startX + dx); // ?? нет, проще:
-                            }
-                        }
-                    }
-                }
-            });
-
-            // простой и предсказуемый путь: применяем dx/dy к каждому выделенному
-            drag.starts.forEach(st => {
-                const l = getLayer(st.id);
-                if (!l) return;
-                if (l.maskId) {
-                    // слой с маской: двигаем саму маску (если она в выделенных, её подвинет её собственный шаг)
-                    if (!selectedIds.includes(l.maskId)) {
-                        const mask = getLayer(l.maskId);
-                        if (mask) {
-                            mask.x = (mask.x) + 0; // ничего
-                        }
-                    }
-                }
-            });
-
-            // Чистый подход: если выделено 1 — двигаем его (или его маску).
-            // Если выделено много — двигаем «объекты», у которых нет маски или маска не в выделении;
-            // для слоёв, чья маска в выделении, ничего не делаем (маска их подвинет).
-            const processedMasks = new Set();
-            if (selectedIds.length === 1) {
+            // Пиinch (масштаб) работает только при одиночном выделении без маски или для маски
+            if (pts.length >= 2 && selectedIds.length === 1) {
+                const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+                const factor = dist / drag.startDist;
+                const newScale = clamp(drag.startScale * factor, 0.05, 3);
                 if (layer.maskId) {
                     const mask = getLayer(layer.maskId);
                     if (mask) {
-                        mask.x = drag.startX + dx;
-                        mask.y = drag.startY + dy;
+                        mask.scale = newScale;
                         applyLayerTransform(mask);
                         applyMaskToLayer(layer);
                         syncChildrenOfMask(mask.id);
                     }
                 } else {
-                    layer.x = drag.startX + dx;
-                    layer.y = drag.startY + dy;
+                    layer.scale = newScale;
                     applyLayerTransform(layer);
                     syncChildrenOfMask(layer.id);
                 }
-            } else {
-                drag.starts.forEach(st => {
-                    const l = getLayer(st.id);
-                    if (!l) return;
-                    // Слой привязан к маске, которая тоже выделена — пропускаем: маска сама подвинет.
-                    if (l.maskId && selectedIds.includes(l.maskId)) return;
-                    if (l.maskId) {
-                        // Маска не в выделении: двигаем маску и слой-«пускач» не нужен.
-                        // Но чтобы не задвоить — фиксируем маску в processedMasks.
-                        const mask = getLayer(l.maskId);
-                        if (mask) {
-                            if (!processedMasks.has(mask.id)) {
-                                processedMasks.add(mask.id);
-                                mask.x = st.startX + dx; // st.startX — это позиция слоя-ребёнка, равная позиции маски
-                                mask.y = st.startY + dy;
-                                applyLayerTransform(mask);
-                                syncChildrenOfMask(mask.id);
-                            }
-                        }
-                    } else {
-                        l.x = st.startX + dx;
-                        l.y = st.startY + dy;
-                        applyLayerTransform(l);
-                        syncChildrenOfMask(l.id);
-                    }
-                });
             }
+
+            // Применяем dx/dy КО ВСЕМ целевым объектам — единый ΔX/ΔY
+            drag.starts.forEach(st => {
+                const o = st.obj;
+                if (!o) return;
+                o.x = st.startX + dx;
+                o.y = st.startY + dy;
+                applyLayerTransform(o);
+                if (o.id) syncChildrenOfMask(o.id);
+            });
 
             syncControlsWithSelected();
             selectedIds.forEach(id => { const l = getLayer(id); if (l) refreshLayerItem(l); });
@@ -1807,14 +1711,11 @@
             }
         });
         if (!patched) throw new Error("Не удалось найти блок TEMPLATE_DATA в исходнике");
-
         const titleEl = docClone.querySelector("title");
         if (titleEl) titleEl.textContent = "Шаблон сцены";
-
         return "<!doctype html>\n" + docClone.outerHTML;
     }
 
-    // -------- Импорт --------
     function extractLayersFromHtml(html) {
         const src = String(html);
         const marker = "const TEMPLATE_DATA = ";
