@@ -51,6 +51,7 @@
         outline: 2px solid transparent; outline-offset: 2px;
     }
     .layer.selected { outline-color: rgba(154, 92, 248, .9); }
+    .layer.selected-primary { outline-color: rgba(154, 92, 248, 1); outline-width: 3px; }
     .layer.mask-parent { outline: 2px dashed rgba(255, 165, 0, .8); }
     .layer img {
         display: block; width: 100%; height: 100%;
@@ -154,6 +155,7 @@
     }
     .layer-item:hover { background: #e9e9ee; }
     .layer-item.selected { border-color: var(--color-accent); background: #f4eefe; }
+    .layer-item.selected-primary { border-color: var(--color-accent); background: #ede2fd; }
     .layer-thumb {
         width: 36px; height: 36px; border-radius: 8px;
         background: #ffffff; display: flex; align-items: center; justify-content: center;
@@ -199,7 +201,6 @@
     .status.info { color: var(--color-muted); }
     .hint { font-size: 12px; color: var(--color-muted); line-height: 1.4; }
 
-    /* Блок смещения внутри маски — показываем только когда есть маска */
     #offsetCard.hidden { display: none; }
 
     .viewer-controls .card { gap: 12px; }
@@ -370,8 +371,13 @@
             <div class="card-head-actions">
                 <button class="secondary icon-btn" id="upBtn" disabled title="Поднять слой выше">↑</button>
                 <button class="secondary icon-btn" id="downBtn" disabled title="Опустить слой ниже">↓</button>
-                <button class="primary" id="dupBtn" disabled>Скопировать слой</button>
+                <button class="primary" id="dupBtn" disabled>Скопировать выделенные</button>
+                <button class="danger" id="removeSelectedBtn" disabled>Удалить выделенные</button>
             </div>
+        </div>
+        <div class="hint">
+            Клик — выделить один. Ctrl/Cmd+клик — добавить/убрать из выделения.
+            Shift+клик — выделить диапазон.
         </div>
         <div class="layers-list" id="layersList">
             <div class="empty-layers" id="emptyLayers">Пока нет слоёв</div>
@@ -488,6 +494,7 @@
     const $offYInc = document.getElementById("offYInc");
 
     const $dupBtn = document.getElementById("dupBtn");
+    const $removeSelectedBtn = document.getElementById("removeSelectedBtn");
     const $upBtn = document.getElementById("upBtn");
     const $downBtn = document.getElementById("downBtn");
     const $centerBtn = document.getElementById("centerBtn");
@@ -509,7 +516,8 @@
     const $viewerFields = document.getElementById("viewerFields");
 
     let layers = [];
-    let selectedId = null;
+    let selectedIds = [];   // мультивыбор
+    let primaryId = null;   // «главный» выделенный (для панели настроек)
     let nextId = 1;
     let teamsCache = null;
     let playersCache = null;
@@ -517,6 +525,7 @@
     let playerLookupToken = 0;
     let debounceTimer = null;
     let playerDebounceTimer = null;
+    let lastClickedIndex = -1; // для Shift+клика
 
     function setStatus(msg, type = "info") { if (!$status) return; $status.textContent = msg; $status.className = "status " + type; }
     function setImageStatus(msg, type = "info") { if (!$imageStatus) return; $imageStatus.textContent = msg; $imageStatus.className = "status " + type; }
@@ -568,10 +577,10 @@
     }
 
     function getLayer(id) { return layers.find(l => l.id === id) || null; }
-    function getSelected() { return getLayer(selectedId); }
+    function getPrimary() { return getLayer(primaryId); }
 
     // -------- Создание слоя --------
-    function createLayer({ team = null, player = null, src, name = null, kind = "logo", role = "", maskId = null, offsetX = 0, offsetY = 0, x, y, scale, autoOffset = false }) {
+    function createLayer({ team = null, player = null, src, name = null, kind = "logo", role = "", maskId = null, offsetX = 0, offsetY = 0, x, y, scale, autoOffset = false, selectAfter = true }) {
         if (!src) return null;
         const id = nextId++;
         const el = document.createElement("div");
@@ -589,11 +598,7 @@
         const displayName = name || team || player || (kind === "image" ? "Картинка" : "Логотип");
 
         const layer = {
-            id,
-            team,
-            player,
-            src,
-            kind,
+            id, team, player, src, kind,
             role: role || "",
             maskId: maskId || null,
             offsetX: (typeof offsetX === "number" && isFinite(offsetX)) ? offsetX : 0,
@@ -601,12 +606,9 @@
             x: (typeof x === "number" && isFinite(x)) ? x : BOARD_SIZE / 2,
             y: (typeof y === "number" && isFinite(y)) ? y : BOARD_SIZE / 2,
             scale: (typeof scale === "number" && isFinite(scale) && scale > 0) ? scale : 1,
-            baseW: 500,
-            baseH: 500,
+            baseW: 500, baseH: 500,
             ready: false,
-            el,
-            clipEl: clip,
-            imgEl: img,
+            el, clipEl: clip, imgEl: img,
             name: displayName,
         };
 
@@ -621,18 +623,14 @@
             layer.ready = true;
 
             if (autoOffset && layers.length > 1) {
-                const offset = 30 * (layers.length - 1);
-                layer.x += offset;
-                layer.y += offset;
+                const off = 30 * (layers.length - 1);
+                layer.x += off;
+                layer.y += off;
             }
             applyLayerTransform(layer);
             applyMaskToLayer(layer);
             updateMaskParentStyles();
-
-            if (!IS_TEMPLATE) {
-                refreshLayerItem(layer);
-                renderLayersList();
-            }
+            if (!IS_TEMPLATE) { refreshLayerItem(layer); renderLayersList(); }
         };
         img.onerror = () => {
             if (IS_TEMPLATE) console.warn("Не удалось загрузить:", layer.src);
@@ -649,7 +647,7 @@
             renderViewerFields();
         } else {
             renderLayersList();
-            selectLayer(id);
+            if (selectAfter) setSelection([id], id);
             updateTemplateState();
             refreshMaskSelects();
             updateMaskParentStyles();
@@ -690,17 +688,9 @@
     }
 
     // -------- Маска-слой --------
-    /**
-     * Слой с маской:
-     *  - сам layer по размеру совпадает с маской (центр = центр маски);
-     *  - clip внутри layer по размеру маски, overflow hidden;
-     *  - img внутри clip смещается на offsetX/offsetY (центр картинки = центр клипа + offset);
-     *  - offsetX/offsetY двигают картинку ТОЛЬКО внутри clip.
-     */
     function applyMaskToLayer(layer) {
         if (!layer || !layer.clipEl) return;
         const clip = layer.clipEl;
-        // сброс
         clip.style.position = "";
         clip.style.left = "";
         clip.style.top = "";
@@ -722,17 +712,13 @@
         const mw = mask.baseW * mask.scale;
         const mh = mask.baseH * mask.scale;
 
-        // Слой принимает размеры и позицию маски
         layer.x = mask.x;
         layer.y = mask.y;
-        // baseW/baseH фиксируем под маску, scale = 1 — чтобы не масштабировать картинку дважды
-        // (сама картинка вписывается через object-fit: cover в клип)
         layer.baseW = mask.baseW;
         layer.baseH = mask.baseH;
         layer.scale = mask.scale;
         applyLayerTransform(layer);
 
-        // clip = размер маски на экране
         clip.style.position = "absolute";
         clip.style.left = "0";
         clip.style.top = "0";
@@ -740,7 +726,6 @@
         clip.style.height = mh + "px";
         clip.style.overflow = "hidden";
 
-        // Картинка по размеру клипа + смещение через transform
         layer.imgEl.style.position = "absolute";
         layer.imgEl.style.left = "0";
         layer.imgEl.style.top = "0";
@@ -751,13 +736,10 @@
     }
 
     function syncChildrenOfMask(maskId) {
-        layers.forEach(l => {
-            if (l.maskId === maskId) applyMaskToLayer(l);
-        });
+        layers.forEach(l => { if (l.maskId === maskId) applyMaskToLayer(l); });
     }
 
     function updateMaskParentStyles() {
-        // подсветить слои, которые служат маской
         const parents = new Set();
         layers.forEach(l => { if (l.maskId) parents.add(l.maskId); });
         layers.forEach(l => {
@@ -767,7 +749,6 @@
 
     function refreshMaskSelects() {
         if (IS_TEMPLATE) return;
-
         const fill = (sel, currentValue, excludeId) => {
             const prev = currentValue;
             sel.querySelectorAll("option").forEach(o => { if (o.value) o.remove(); });
@@ -781,24 +762,42 @@
             const exists = [...sel.options].some(o => o.value === prev);
             sel.value = exists ? prev : "";
         };
-
-        const cur = getSelected();
+        const cur = getPrimary();
         fill($layerMask, $layerMask.value, cur ? cur.id : null);
         fill($imageMask, $imageMask.value, null);
         fill($teamMask, $teamMask.value, null);
         fill($playerMask, $playerMask.value, null);
-
         if (cur) $layerMask.value = cur.maskId ? String(cur.maskId) : "";
     }
 
-    function selectLayer(id) {
-        if (IS_TEMPLATE) return;
-        const layer = getLayer(id);
-        selectedId = layer ? id : null;
-        layers.forEach(l => l.el.classList.toggle("selected", l.id === selectedId));
-        document.querySelectorAll(".layer-item").forEach(item => {
-            item.classList.toggle("selected", Number(item.dataset.id) === selectedId);
+    // -------- Мультивыбор --------
+    function setSelection(ids, primary = null) {
+        // ids — массив id
+        selectedIds = ids.slice();
+        if (ids.length === 0) {
+            primaryId = null;
+        } else if (primary !== null && ids.includes(primary)) {
+            primaryId = primary;
+        } else {
+            primaryId = ids[ids.length - 1];
+        }
+        // подсветка на холсте
+        layers.forEach(l => {
+            const isSel = selectedIds.includes(l.id);
+            l.el.classList.toggle("selected", isSel);
+            l.el.classList.toggle("selected-primary", l.id === primaryId);
         });
+        // подсветка в списке
+        document.querySelectorAll(".layer-item").forEach(item => {
+            const id = Number(item.dataset.id);
+            const isSel = selectedIds.includes(id);
+            item.classList.toggle("selected", isSel);
+            item.classList.toggle("selected-primary", id === primaryId);
+        });
+        // индекс для Shift+клика
+        if (primaryId !== null) {
+            lastClickedIndex = layers.findIndex(l => l.id === primaryId);
+        }
         updateControlsState();
         syncControlsWithSelected();
         updateSelectedTitle();
@@ -806,9 +805,28 @@
         updateOffsetCard();
     }
 
+    function toggleInSelection(id) {
+        if (selectedIds.includes(id)) {
+            const next = selectedIds.filter(x => x !== id);
+            setSelection(next, next.length ? next[next.length - 1] : null);
+        } else {
+            setSelection([...selectedIds, id], id);
+        }
+    }
+
+    function rangeSelectionTo(id) {
+        if (lastClickedIndex < 0) { setSelection([id], id); return; }
+        const targetIdx = layers.findIndex(l => l.id === id);
+        if (targetIdx < 0) return;
+        const lo = Math.min(lastClickedIndex, targetIdx);
+        const hi = Math.max(lastClickedIndex, targetIdx);
+        const ids = layers.slice(lo, hi + 1).map(l => l.id);
+        setSelection(ids, id);
+    }
+
     function updateOffsetCard() {
         if (!$offsetCard) return;
-        const layer = getSelected();
+        const layer = getPrimary();
         const has = layer && layer.maskId;
         $offsetCard.classList.toggle("hidden", !has);
     }
@@ -818,13 +836,30 @@
         if (!layer) return;
         layer.el.remove();
         layers = layers.filter(l => l.id !== id);
-        layers.forEach(l => {
-            if (l.maskId === id) { l.maskId = null; applyMaskToLayer(l); }
-        });
-        if (selectedId === id) selectedId = layers.length ? layers[layers.length - 1].id : null;
+        layers.forEach(l => { if (l.maskId === id) { l.maskId = null; applyMaskToLayer(l); } });
+        const nextSel = selectedIds.filter(x => x !== id);
+        setSelection(nextSel, nextSel.length ? nextSel[nextSel.length - 1] : null);
         updateZIndices();
         renderLayersList();
-        selectLayer(selectedId);
+        updateTemplateState();
+        refreshMaskSelects();
+        updateMaskParentStyles();
+    }
+
+    function removeSelected() {
+        if (!selectedIds.length) return;
+        const ids = selectedIds.slice();
+        ids.forEach(id => {
+            const layer = getLayer(id);
+            if (layer) layer.el.remove();
+        });
+        layers = layers.filter(l => !ids.includes(l.id));
+        layers.forEach(l => {
+            if (l.maskId && ids.includes(l.maskId)) { l.maskId = null; applyMaskToLayer(l); }
+        });
+        setSelection([], null);
+        updateZIndices();
+        renderLayersList();
         updateTemplateState();
         refreshMaskSelects();
         updateMaskParentStyles();
@@ -833,9 +868,11 @@
     function clearAllLayers() {
         layers.forEach(l => l.el.remove());
         layers = [];
-        selectedId = null;
+        selectedIds = [];
+        primaryId = null;
+        lastClickedIndex = -1;
         renderLayersList();
-        selectLayer(null);
+        updateControlsState();
         updateTemplateState();
         refreshMaskSelects();
         updateMaskParentStyles();
@@ -850,29 +887,39 @@
         layers.splice(target, 0, layer);
         updateZIndices();
         renderLayersList();
-        selectLayer(id);
+        setSelection(selectedIds, primaryId);
         return true;
     }
 
     function updateSelectedTitle() {
-        const layer = getSelected();
+        if (selectedIds.length === 0) { $selTitle.textContent = "Настройки слоя"; return; }
+        if (selectedIds.length > 1) {
+            $selTitle.textContent = `Выделено слоёв: ${selectedIds.length}`;
+            return;
+        }
+        const layer = getPrimary();
         if (!layer) { $selTitle.textContent = "Настройки слоя"; return; }
         const kindLabel = layer.kind === "image" ? "картинка" : "логотип";
         $selTitle.textContent = `Настройки слоя: ${layer.name || kindLabel}`;
     }
 
     function updateControlsState() {
-        const has = !!getSelected();
+        const multi = selectedIds.length > 1;
+        const has = selectedIds.length === 1 && !!getPrimary();
+
         [$posX, $posY, $scale, $posXNum, $posYNum, $scaleNum].forEach($el => { if ($el) $el.disabled = !has; });
         [$posXDec, $posXInc, $posYDec, $posYInc, $scaleDec, $scaleInc].forEach($el => { if ($el) $el.disabled = !has; });
         if ($centerBtn) $centerBtn.disabled = !has;
         if ($resetBtn) $resetBtn.disabled = !has;
         if ($removeBtn) $removeBtn.disabled = !has;
-        if ($dupBtn) $dupBtn.disabled = !has;
         if ($layerName) $layerName.disabled = !has;
         if ($layerRole) $layerRole.disabled = !has;
         if ($layerMask) $layerMask.disabled = !has;
-        const idx = has ? layers.findIndex(l => l.id === selectedId) : -1;
+
+        if ($dupBtn) $dupBtn.disabled = selectedIds.length === 0;
+        if ($removeSelectedBtn) $removeSelectedBtn.disabled = selectedIds.length === 0;
+
+        const idx = has ? layers.findIndex(l => l.id === primaryId) : -1;
         if ($upBtn) $upBtn.disabled = !has || idx === layers.length - 1;
         if ($downBtn) $downBtn.disabled = !has || idx === 0;
         if (!has) {
@@ -893,7 +940,7 @@
     }
 
     function syncControlsWithSelected() {
-        const layer = getSelected();
+        const layer = getPrimary();
         if (!layer) return;
         const rx = Math.round(layer.x);
         const ry = Math.round(layer.y);
@@ -923,7 +970,9 @@
 
         [...layers].reverse().forEach(layer => {
             const item = document.createElement("div");
-            item.className = "layer-item" + (layer.id === selectedId ? " selected" : "");
+            const isSel = selectedIds.includes(layer.id);
+            const isPrimary = layer.id === primaryId;
+            item.className = "layer-item" + (isSel ? " selected" : "") + (isPrimary ? " selected-primary" : "");
             item.dataset.id = String(layer.id);
 
             const thumb = document.createElement("div");
@@ -974,7 +1023,15 @@
             rm.textContent = "×";
             rm.addEventListener("click", e => { e.stopPropagation(); removeLayer(layer.id); });
 
-            item.addEventListener("click", () => selectLayer(layer.id));
+            item.addEventListener("click", e => {
+                if (e.shiftKey) {
+                    rangeSelectionTo(layer.id);
+                } else if (e.ctrlKey || e.metaKey) {
+                    toggleInSelection(layer.id);
+                } else {
+                    setSelection([layer.id], layer.id);
+                }
+            });
             name.addEventListener("dblclick", e => { e.stopPropagation(); startInlineRename(name, layer); });
 
             item.appendChild(thumb);
@@ -983,8 +1040,8 @@
             $layersList.appendChild(item);
         });
 
-        const has = !!getSelected();
-        const idx = has ? layers.findIndex(l => l.id === selectedId) : -1;
+        const has = selectedIds.length === 1 && !!getPrimary();
+        const idx = has ? layers.findIndex(l => l.id === primaryId) : -1;
         if ($upBtn) $upBtn.disabled = !has || idx === layers.length - 1;
         if ($downBtn) $downBtn.disabled = !has || idx === 0;
     }
@@ -1026,7 +1083,7 @@
         const name = String(newName || "").trim();
         if (!name) return;
         layer.name = name;
-        if (selectedId === id) {
+        if (primaryId === id) {
             if ($layerName) $layerName.value = name;
             updateSelectedTitle();
         }
@@ -1040,9 +1097,9 @@
         if (!item) return;
         const coords = item.querySelector(".layer-coords");
         if (coords) {
-            let coordsText = `X: ${Math.round(layer.x)} · Y: ${Math.round(layer.y)} · ${Math.round(layer.scale * 100)}%`;
-            if (layer.maskId) coordsText += ` · внутри: ${Math.round(layer.offsetX)},${Math.round(layer.offsetY)}`;
-            coords.textContent = coordsText;
+            let t = `X: ${Math.round(layer.x)} · Y: ${Math.round(layer.y)} · ${Math.round(layer.scale * 100)}%`;
+            if (layer.maskId) t += ` · внутри: ${Math.round(layer.offsetX)},${Math.round(layer.offsetY)}`;
+            coords.textContent = t;
         }
     }
 
@@ -1059,12 +1116,8 @@
             setStatus(`Лого: ${team.full}`, "ok");
             if (addAsLayer) {
                 createLayer({
-                    team: team.full,
-                    src: team.logo,
-                    kind: "logo",
-                    role: "team-logo",
-                    maskId: maskId || null,
-                    autoOffset: true,
+                    team: team.full, src: team.logo, kind: "logo", role: "team-logo",
+                    maskId: maskId || null, autoOffset: true,
                 });
             }
         } catch (e) {
@@ -1086,17 +1139,74 @@
             setPlayerStatus(`Фото: ${p.nick}`, "ok");
             if (addAsLayer) {
                 createLayer({
-                    player: p.nick,
-                    src: p.photo,
-                    kind: "logo",
-                    role: "player-photo",
-                    maskId: maskId || null,
-                    autoOffset: true,
+                    player: p.nick, src: p.photo, kind: "logo", role: "player-photo",
+                    maskId: maskId || null, autoOffset: true,
                 });
             }
         } catch (e) {
             if (token !== playerLookupToken) return;
             setPlayerStatus("Ошибка: " + (e && e.message ? e.message : e), "error");
+        }
+    }
+
+    // -------- Дублирование выделенных --------
+    /**
+     * Копирует выбранные слои с точно теми же координатами, что у исходников.
+     * Внутри группы маски остаются связанными: если слой A служит маской для B,
+     * и оба выбраны — копия B будет привязана к копии A, а не к оригиналу A.
+     * Если маска не входит в выборку, копия остаётся привязанной к исходной маске.
+     */
+    function duplicateSelected() {
+        if (!selectedIds.length) return;
+        // сохраняем порядок слоёв (снизу вверх), чтобы z-index копий был как у оригиналов
+        const orderedIds = layers.map(l => l.id).filter(id => selectedIds.includes(id));
+        const oldToNew = new Map(); // oldId -> newLayer
+
+        orderedIds.forEach(oldId => {
+            const orig = getLayer(oldId);
+            if (!orig) return;
+            // maskId: если маска в выборке — привязываем к копии маски (создадим после),
+            // временно оставляем null, свяжем на втором проходе.
+            const maskInSelection = orig.maskId && selectedIds.includes(orig.maskId);
+            const copy = createLayer({
+                team: orig.team,
+                player: orig.player,
+                src: orig.src,
+                name: orig.name ? orig.name + " (копия)" : null,
+                kind: orig.kind,
+                role: orig.role,
+                maskId: maskInSelection ? null : orig.maskId,
+                offsetX: orig.offsetX,
+                offsetY: orig.offsetY,
+                x: orig.x,  // те же координаты, что у исходника
+                y: orig.y,
+                scale: orig.scale,
+                autoOffset: false,
+                selectAfter: false,
+            });
+            if (copy) {
+                copy._origMaskId = orig.maskId || null;
+                oldToNew.set(oldId, copy);
+            }
+        });
+
+        // связать маски внутри копий
+        oldToNew.forEach((copy, oldId) => {
+            if (copy._origMaskId && oldToNew.has(copy._origMaskId)) {
+                copy.maskId = oldToNew.get(copy._origMaskId).id;
+                applyMaskToLayer(copy);
+            }
+            delete copy._origMaskId;
+        });
+
+        // выделяем копии
+        const newIds = Array.from(oldToNew.values()).map(c => c.id);
+        if (newIds.length) {
+            setSelection(newIds, newIds[newIds.length - 1]);
+            setStatus(`Скопировано слоёв: ${newIds.length}`, "ok");
+            // поднять копии на верх? нет — оставляем z-index как при создании (сверху)
+            updateZIndices();
+            renderLayersList();
         }
     }
 
@@ -1107,10 +1217,7 @@
             debounceTimer = setTimeout(() => lookupTeam($teamName.value, true, $teamMask.value ? Number($teamMask.value) : null), 350);
         });
         $teamName.addEventListener("keydown", e => {
-            if (e.key === "Enter") {
-                clearTimeout(debounceTimer);
-                lookupTeam($teamName.value, true, $teamMask.value ? Number($teamMask.value) : null);
-            }
+            if (e.key === "Enter") { clearTimeout(debounceTimer); lookupTeam($teamName.value, true, $teamMask.value ? Number($teamMask.value) : null); }
         });
 
         $playerName.addEventListener("input", () => {
@@ -1118,29 +1225,21 @@
             playerDebounceTimer = setTimeout(() => lookupPlayer($playerName.value, true, $playerMask.value ? Number($playerMask.value) : null), 350);
         });
         $playerName.addEventListener("keydown", e => {
-            if (e.key === "Enter") {
-                clearTimeout(playerDebounceTimer);
-                lookupPlayer($playerName.value, true, $playerMask.value ? Number($playerMask.value) : null);
-            }
+            if (e.key === "Enter") { clearTimeout(playerDebounceTimer); lookupPlayer($playerName.value, true, $playerMask.value ? Number($playerMask.value) : null); }
         });
 
-        $dupBtn.addEventListener("click", () => {
-            const src = getSelected();
-            if (!src) return;
-            createLayer({
-                team: src.team, player: src.player, src: src.src, name: src.name + " (копия)",
-                kind: src.kind, role: src.role, maskId: src.maskId,
-                offsetX: src.offsetX, offsetY: src.offsetY,
-                x: src.x + 30, y: src.y + 30, scale: src.scale,
-            });
-            setStatus(`Слой скопирован: ${src.name}`, "ok");
+        $dupBtn.addEventListener("click", duplicateSelected);
+        $removeSelectedBtn.addEventListener("click", () => {
+            if (!selectedIds.length) return;
+            if (!confirm(`Удалить ${selectedIds.length} слой(ёв)?`)) return;
+            removeSelected();
         });
 
         $upBtn.addEventListener("click", () => {
-            if (selectedId && moveLayerInZ(selectedId, +1)) setStatus("Слой поднят выше", "info");
+            if (primaryId && selectedIds.length === 1 && moveLayerInZ(primaryId, +1)) setStatus("Слой поднят выше", "info");
         });
         $downBtn.addEventListener("click", () => {
-            if (selectedId && moveLayerInZ(selectedId, -1)) setStatus("Слой опущен ниже", "info");
+            if (primaryId && selectedIds.length === 1 && moveLayerInZ(primaryId, -1)) setStatus("Слой опущен ниже", "info");
         });
 
         function addImageLayer() {
@@ -1151,14 +1250,10 @@
             if (!/^https?:\/\//i.test(url)) { setImageStatus("Ссылка должна начинаться с http:// или https://", "error"); return; }
             setImageStatus("Загрузка изображения…", "info");
             const layer = createLayer({
-                src: url,
-                name: name || "Картинка",
-                kind: "image",
-                role: "image-swap",
+                src: url, name: name || "Картинка", kind: "image", role: "image-swap",
                 maskId: maskVal ? Number(maskVal) : null,
             });
             if (layer) {
-                if (maskVal) applyMaskToLayer(layer);
                 setImageStatus(`Добавлен слой: ${layer.name}`, "ok");
                 $imageUrl.value = "";
                 $imageName.value = "";
@@ -1169,7 +1264,7 @@
         $imageName.addEventListener("keydown", e => { if (e.key === "Enter") addImageLayer(); });
 
         $layerName.addEventListener("input", () => {
-            const layer = getSelected();
+            const layer = getPrimary();
             if (!layer) return;
             const v = $layerName.value.trim();
             if (v) {
@@ -1185,7 +1280,7 @@
             }
         });
         $layerName.addEventListener("blur", () => {
-            const layer = getSelected();
+            const layer = getPrimary();
             if (!layer) return;
             const v = $layerName.value.trim();
             const fallback = layer.kind === "image" ? "Картинка" : "Логотип";
@@ -1197,7 +1292,7 @@
         });
 
         $layerRole.addEventListener("change", () => {
-            const layer = getSelected();
+            const layer = getPrimary();
             if (!layer) return;
             layer.role = $layerRole.value || "";
             renderLayersList();
@@ -1205,7 +1300,7 @@
         });
 
         $layerMask.addEventListener("change", () => {
-            const layer = getSelected();
+            const layer = getPrimary();
             if (!layer) return;
             const newId = $layerMask.value ? Number($layerMask.value) : null;
             if (newId === layer.id) {
@@ -1225,11 +1320,7 @@
                 }
             }
             layer.maskId = newId;
-            if (newId) {
-                // сбрасываем offset, чтобы было предсказуемо
-                layer.offsetX = 0;
-                layer.offsetY = 0;
-            }
+            if (newId) { layer.offsetX = 0; layer.offsetY = 0; }
             applyMaskToLayer(layer);
             renderLayersList();
             updateOffsetCard();
@@ -1239,68 +1330,44 @@
         });
 
         function applyX(v) {
-            const l = getSelected(); if (!l) return;
+            const l = getPrimary(); if (!l) return;
             if (l.maskId) {
-                // слой с маской не двигается вручную — двигаем саму маску
                 const mask = getLayer(l.maskId);
-                if (mask) {
-                    mask.x = v;
-                    applyLayerTransform(mask);
-                    applyMaskToLayer(l);
-                    syncChildrenOfMask(mask.id);
-                    if (selectedId === mask.id) {} // никаких рекурсий
-                }
+                if (mask) { mask.x = v; applyLayerTransform(mask); applyMaskToLayer(l); syncChildrenOfMask(mask.id); }
             } else {
-                l.x = v;
-                applyLayerTransform(l);
-                syncChildrenOfMask(l.id);
+                l.x = v; applyLayerTransform(l); syncChildrenOfMask(l.id);
             }
             $posX.value = clamp(v, -1000, 2000);
             $posXNum.value = Math.round(v);
             refreshLayerItem(l);
         }
         function applyY(v) {
-            const l = getSelected(); if (!l) return;
+            const l = getPrimary(); if (!l) return;
             if (l.maskId) {
                 const mask = getLayer(l.maskId);
-                if (mask) {
-                    mask.y = v;
-                    applyLayerTransform(mask);
-                    applyMaskToLayer(l);
-                    syncChildrenOfMask(mask.id);
-                }
+                if (mask) { mask.y = v; applyLayerTransform(mask); applyMaskToLayer(l); syncChildrenOfMask(mask.id); }
             } else {
-                l.y = v;
-                applyLayerTransform(l);
-                syncChildrenOfMask(l.id);
+                l.y = v; applyLayerTransform(l); syncChildrenOfMask(l.id);
             }
             $posY.value = clamp(v, -1000, 2000);
             $posYNum.value = Math.round(v);
             refreshLayerItem(l);
         }
         function applyScale(v) {
-            const l = getSelected(); if (!l) return;
+            const l = getPrimary(); if (!l) return;
             v = clamp(v, 0.05, 3);
             if (l.maskId) {
                 const mask = getLayer(l.maskId);
-                if (mask) {
-                    mask.scale = v;
-                    applyLayerTransform(mask);
-                    applyMaskToLayer(l);
-                    syncChildrenOfMask(mask.id);
-                }
+                if (mask) { mask.scale = v; applyLayerTransform(mask); applyMaskToLayer(l); syncChildrenOfMask(mask.id); }
             } else {
-                l.scale = v;
-                applyLayerTransform(l);
-                applyMaskToLayer(l);
-                syncChildrenOfMask(l.id);
+                l.scale = v; applyLayerTransform(l); applyMaskToLayer(l); syncChildrenOfMask(l.id);
             }
             $scale.value = v.toFixed(2);
             $scaleNum.value = v.toFixed(2);
             refreshLayerItem(l);
         }
         function applyOffsetX(v) {
-            const l = getSelected(); if (!l || !l.maskId) return;
+            const l = getPrimary(); if (!l || !l.maskId) return;
             l.offsetX = v;
             applyMaskToLayer(l);
             if ($offX) $offX.value = Math.round(v);
@@ -1308,7 +1375,7 @@
             refreshLayerItem(l);
         }
         function applyOffsetY(v) {
-            const l = getSelected(); if (!l || !l.maskId) return;
+            const l = getPrimary(); if (!l || !l.maskId) return;
             l.offsetY = v;
             applyMaskToLayer(l);
             if ($offY) $offY.value = Math.round(v);
@@ -1333,28 +1400,22 @@
         $offXNum.addEventListener("blur", () => syncControlsWithSelected());
         $offYNum.addEventListener("blur", () => syncControlsWithSelected());
 
-        $posXDec.addEventListener("click", () => { const l = getSelected(); if (!l) return; applyX(Math.round(l.x) - 1); });
-        $posXInc.addEventListener("click", () => { const l = getSelected(); if (!l) return; applyX(Math.round(l.x) + 1); });
-        $posYDec.addEventListener("click", () => { const l = getSelected(); if (!l) return; applyY(Math.round(l.y) - 1); });
-        $posYInc.addEventListener("click", () => { const l = getSelected(); if (!l) return; applyY(Math.round(l.y) + 1); });
-        $scaleDec.addEventListener("click", () => { const l = getSelected(); if (!l) return; applyScale(Math.round((l.scale - 0.01) * 100) / 100); });
-        $scaleInc.addEventListener("click", () => { const l = getSelected(); if (!l) return; applyScale(Math.round((l.scale + 0.01) * 100) / 100); });
-        $offXDec.addEventListener("click", () => { const l = getSelected(); if (!l) return; applyOffsetX(Math.round(l.offsetX) - 1); });
-        $offXInc.addEventListener("click", () => { const l = getSelected(); if (!l) return; applyOffsetX(Math.round(l.offsetX) + 1); });
-        $offYDec.addEventListener("click", () => { const l = getSelected(); if (!l) return; applyOffsetY(Math.round(l.offsetY) - 1); });
-        $offYInc.addEventListener("click", () => { const l = getSelected(); if (!l) return; applyOffsetY(Math.round(l.offsetY) + 1); });
+        $posXDec.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyX(Math.round(l.x) - 1); });
+        $posXInc.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyX(Math.round(l.x) + 1); });
+        $posYDec.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyY(Math.round(l.y) - 1); });
+        $posYInc.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyY(Math.round(l.y) + 1); });
+        $scaleDec.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyScale(Math.round((l.scale - 0.01) * 100) / 100); });
+        $scaleInc.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyScale(Math.round((l.scale + 0.01) * 100) / 100); });
+        $offXDec.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyOffsetX(Math.round(l.offsetX) - 1); });
+        $offXInc.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyOffsetX(Math.round(l.offsetX) + 1); });
+        $offYDec.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyOffsetY(Math.round(l.offsetY) - 1); });
+        $offYInc.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyOffsetY(Math.round(l.offsetY) + 1); });
 
         $centerBtn.addEventListener("click", () => {
-            const l = getSelected(); if (!l) return;
+            const l = getPrimary(); if (!l) return;
             if (l.maskId) {
                 const mask = getLayer(l.maskId);
-                if (mask) {
-                    mask.x = BOARD_SIZE / 2;
-                    mask.y = BOARD_SIZE / 2;
-                    applyLayerTransform(mask);
-                    applyMaskToLayer(l);
-                    syncChildrenOfMask(mask.id);
-                }
+                if (mask) { mask.x = BOARD_SIZE / 2; mask.y = BOARD_SIZE / 2; applyLayerTransform(mask); applyMaskToLayer(l); syncChildrenOfMask(mask.id); }
             } else {
                 l.x = BOARD_SIZE / 2; l.y = BOARD_SIZE / 2;
                 applyLayerTransform(l);
@@ -1364,24 +1425,14 @@
             refreshLayerItem(l);
         });
         $resetBtn.addEventListener("click", () => {
-            const l = getSelected(); if (!l) return;
-            if (l.maskId) {
-                l.offsetX = 0;
-                l.offsetY = 0;
-                applyMaskToLayer(l);
-                syncControlsWithSelected();
-                refreshLayerItem(l);
-            } else {
-                l.scale = 1;
-                applyLayerTransform(l);
-                applyMaskToLayer(l);
-                syncChildrenOfMask(l.id);
-                syncControlsWithSelected();
-                refreshLayerItem(l);
-            }
+            const l = getPrimary(); if (!l) return;
+            if (l.maskId) { l.offsetX = 0; l.offsetY = 0; applyMaskToLayer(l); }
+            else { l.scale = 1; applyLayerTransform(l); applyMaskToLayer(l); syncChildrenOfMask(l.id); }
+            syncControlsWithSelected();
+            refreshLayerItem(l);
         });
         $removeBtn.addEventListener("click", () => {
-            const l = getSelected(); if (!l) return;
+            const l = getPrimary(); if (!l) return;
             removeLayer(l.id);
         });
 
@@ -1392,9 +1443,7 @@
                 const html = buildTemplateHtml();
                 const w = window.open("", "_blank");
                 if (!w) { setTemplateStatus("Всплывающее окно заблокировано — разрешите popup", "error"); return; }
-                w.document.open();
-                w.document.write(html);
-                w.document.close();
+                w.document.open(); w.document.write(html); w.document.close();
                 setTemplateStatus("Предпросмотр открыт в новой вкладке", "ok");
             } catch (e) {
                 setTemplateStatus("Ошибка: " + (e && e.message ? e.message : e), "error");
@@ -1409,9 +1458,7 @@
                 const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
                 a.href = url;
                 a.download = `scene-template-${stamp}.html`;
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
+                document.body.appendChild(a); a.click(); a.remove();
                 setTimeout(() => URL.revokeObjectURL(url), 2000);
                 setTemplateStatus("Файл сохранён", "ok");
             } catch (e) {
@@ -1451,6 +1498,9 @@
             }
         });
 
+        // Ctrl/Cmd + клик по холсту добавляет/убирает из выделения
+        // (простые клики/перетаскивания обрабатываются installBoardGestures)
+
         updateControlsState();
         renderLayersList();
         updateTemplateState();
@@ -1483,10 +1533,6 @@
             }
             return null;
         }
-        /**
-         * Возвращает true, если клиентская точка попала в ВИДИМУЮ часть маскированного слоя
-         * (то есть в clip). Нужно, чтобы отличить «двигаем картинку внутри» от «двигаем весь слой».
-         */
         function isPointInClip(layer, clientX, clientY) {
             if (!layer.maskId) return false;
             const mask = getLayer(layer.maskId);
@@ -1505,7 +1551,19 @@
             if (IS_TEMPLATE || layers.length === 0) return;
             const hit = hitLayerAt(e.clientX, e.clientY);
             if (!hit) return;
-            selectLayer(hit.id);
+
+            if (e.shiftKey) {
+                // Shift по холсту: диапазон
+                rangeSelectionTo(hit.id);
+            } else if (e.ctrlKey || e.metaKey) {
+                // Ctrl/Cmd: toggle
+                toggleInSelection(hit.id);
+                return;
+            } else {
+                // одиночный выбор
+                setSelection([hit.id], hit.id);
+            }
+
             $board.setPointerCapture(e.pointerId);
             pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
             $board.classList.add("dragging");
@@ -1519,7 +1577,7 @@
         function endPointer(e) {
             pointers.delete(e.pointerId);
             if (pointers.size === 0) { drag = null; $board.classList.remove("dragging"); }
-            else startGesture(getSelected(), 0, 0);
+            else startGesture(getPrimary(), 0, 0);
         }
         $board.addEventListener("pointerup", endPointer);
         $board.addEventListener("pointercancel", endPointer);
@@ -1534,9 +1592,18 @@
             const dist = pts.length >= 2 ? Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) : 1;
 
             let insideClip = false;
-            if (layer && layer.maskId && cx && cy) {
-                insideClip = isPointInClip(layer, cx, cy);
-            }
+            if (layer && layer.maskId && cx && cy) insideClip = isPointInClip(layer, cx, cy);
+
+            // стартовые позиции для всех выделенных (для группового перетаскивания)
+            const starts = selectedIds.map(id => {
+                const l = getLayer(id);
+                if (!l) return null;
+                return {
+                    id,
+                    startX: l.x, startY: l.y,
+                    startOffsetX: l.offsetX, startOffsetY: l.offsetY,
+                };
+            }).filter(Boolean);
 
             drag = {
                 layerId: layer ? layer.id : null,
@@ -1547,6 +1614,7 @@
                 startOffsetY: layer ? layer.offsetY : 0,
                 startScale: layer ? layer.scale : 1,
                 startMid: mid, startDist: dist,
+                starts, // для группового перемещения
             };
         }
         function updateGesture() {
@@ -1561,8 +1629,8 @@
             const dx = mid.x - drag.startMid.x;
             const dy = mid.y - drag.startMid.y;
 
-            if (drag.insideClip && layer.maskId) {
-                // двигаем картинку ВНУТРИ клипа
+            // Если двигаем одиночный слой с маской и внутри клипа — сдвиг offset'ов
+            if (drag.insideClip && layer.maskId && selectedIds.length === 1) {
                 layer.offsetX = drag.startOffsetX + dx;
                 layer.offsetY = drag.startOffsetY + dy;
                 applyMaskToLayer(layer);
@@ -1574,24 +1642,94 @@
                 return;
             }
 
-            // иначе двигаем сам слой (и маску, если есть)
-            if (layer.maskId) {
-                const mask = getLayer(layer.maskId);
-                if (mask) {
-                    mask.x = drag.startX + dx;
-                    mask.y = drag.startY + dy;
-                    applyLayerTransform(mask);
-                    applyMaskToLayer(layer);
-                    syncChildrenOfMask(mask.id);
+            // Групповое перемещение: двигаем все выделенные. Для слоя с маской
+            // двигаем маску (если маска тоже в выделении — двигаем только её, чтобы не задвоить).
+            const usedMasks = new Set();
+            drag.starts.forEach(st => {
+                const l = getLayer(st.id);
+                if (!l) return;
+                if (l.maskId) {
+                    const mask = getLayer(l.maskId);
+                    if (mask) {
+                        if (usedMasks.has(mask.id)) {
+                            // маску уже двигали — только пересчитываем клип
+                            applyMaskToLayer(l);
+                        } else {
+                            usedMasks.add(mask.id);
+                            // Если маска тоже выделена — её подвинет свой цикл
+                            if (!selectedIds.includes(mask.id)) {
+                                mask.x = (mask.x - layer.x) + (drag.startX + dx); // ?? нет, проще:
+                            }
+                        }
+                    }
+                }
+            });
+
+            // простой и предсказуемый путь: применяем dx/dy к каждому выделенному
+            drag.starts.forEach(st => {
+                const l = getLayer(st.id);
+                if (!l) return;
+                if (l.maskId) {
+                    // слой с маской: двигаем саму маску (если она в выделенных, её подвинет её собственный шаг)
+                    if (!selectedIds.includes(l.maskId)) {
+                        const mask = getLayer(l.maskId);
+                        if (mask) {
+                            mask.x = (mask.x) + 0; // ничего
+                        }
+                    }
+                }
+            });
+
+            // Чистый подход: если выделено 1 — двигаем его (или его маску).
+            // Если выделено много — двигаем «объекты», у которых нет маски или маска не в выделении;
+            // для слоёв, чья маска в выделении, ничего не делаем (маска их подвинет).
+            const processedMasks = new Set();
+            if (selectedIds.length === 1) {
+                if (layer.maskId) {
+                    const mask = getLayer(layer.maskId);
+                    if (mask) {
+                        mask.x = drag.startX + dx;
+                        mask.y = drag.startY + dy;
+                        applyLayerTransform(mask);
+                        applyMaskToLayer(layer);
+                        syncChildrenOfMask(mask.id);
+                    }
+                } else {
+                    layer.x = drag.startX + dx;
+                    layer.y = drag.startY + dy;
+                    applyLayerTransform(layer);
+                    syncChildrenOfMask(layer.id);
                 }
             } else {
-                layer.x = drag.startX + dx;
-                layer.y = drag.startY + dy;
-                applyLayerTransform(layer);
-                syncChildrenOfMask(layer.id);
+                drag.starts.forEach(st => {
+                    const l = getLayer(st.id);
+                    if (!l) return;
+                    // Слой привязан к маске, которая тоже выделена — пропускаем: маска сама подвинет.
+                    if (l.maskId && selectedIds.includes(l.maskId)) return;
+                    if (l.maskId) {
+                        // Маска не в выделении: двигаем маску и слой-«пускач» не нужен.
+                        // Но чтобы не задвоить — фиксируем маску в processedMasks.
+                        const mask = getLayer(l.maskId);
+                        if (mask) {
+                            if (!processedMasks.has(mask.id)) {
+                                processedMasks.add(mask.id);
+                                mask.x = st.startX + dx; // st.startX — это позиция слоя-ребёнка, равная позиции маски
+                                mask.y = st.startY + dy;
+                                applyLayerTransform(mask);
+                                syncChildrenOfMask(mask.id);
+                            }
+                        }
+                    } else {
+                        l.x = st.startX + dx;
+                        l.y = st.startY + dy;
+                        applyLayerTransform(l);
+                        syncChildrenOfMask(l.id);
+                    }
+                });
             }
+
             syncControlsWithSelected();
-            refreshLayerItem(layer);
+            selectedIds.forEach(id => { const l = getLayer(id); if (l) refreshLayerItem(l); });
         }
 
         $board.addEventListener("wheel", e => {
@@ -1599,22 +1737,16 @@
             const hit = hitLayerAt(e.clientX, e.clientY);
             if (!hit) return;
             e.preventDefault();
-            if (hit.id !== selectedId) selectLayer(hit.id);
+            if (hit.id !== primaryId) setSelection([hit.id], hit.id);
             const layer = getLayer(hit.id);
             const factor = Math.exp(-e.deltaY * 0.0015);
-            // Alt (или Shift) — масштаб КАРТИНКИ внутри клипа, без модификатора — масштаб слоя/маски
             const zoomInside = e.altKey || e.shiftKey;
 
             if (hit.maskId && zoomInside) {
-                // масштабируем картинку внутри: увеличиваем размер img относительно клипа
-                // реализуем через offset + transform scale — здесь просто скорректируем offset,
-                // чтобы масштаб ощущался как «вокруг курсора»; но для простоты и надёжности
-                // меняем размер картинки через transform scale к слою
                 if (!layer._imgScale) layer._imgScale = 1;
                 layer._imgScale = clamp(layer._imgScale * factor, 0.2, 5);
                 layer.imgEl.style.transformOrigin = "center center";
-                layer.imgEl.style.transform =
-                    `translate(${layer.offsetX}px, ${layer.offsetY}px) scale(${layer._imgScale})`;
+                layer.imgEl.style.transform = `translate(${layer.offsetX}px, ${layer.offsetY}px) scale(${layer._imgScale})`;
                 return;
             }
 
@@ -1731,7 +1863,6 @@
                 : true;
             if (replace) clearAllLayers();
 
-            // Первый проход: создаём без масок
             const created = [];
             arr.forEach(item => {
                 if (!item || !item.src) return;
@@ -1744,15 +1875,12 @@
                     player: String(item.player || "").trim() || null,
                     offsetX: Number(item.offsetX) || 0,
                     offsetY: Number(item.offsetY) || 0,
-                    x: Number(item.x),
-                    y: Number(item.y),
-                    scale: Number(item.scale),
-                    autoOffset: false,
+                    x: Number(item.x), y: Number(item.y), scale: Number(item.scale),
+                    autoOffset: false, selectAfter: false,
                 });
                 if (l) created.push({ srcItem: item, layer: l });
             });
 
-            // Второй проход: связываем маски
             created.forEach(({ srcItem, layer }) => {
                 if (!srcItem.maskId) return;
                 const maskSrc = arr.find(x => x && String(x.id) === String(srcItem.maskId));
@@ -1766,6 +1894,7 @@
             });
 
             updateMaskParentStyles();
+            setSelection([], null);
             setImportStatus(`Импортировано слоёв: ${created.length}`, "ok");
             updateTemplateState();
             refreshMaskSelects();
@@ -1802,9 +1931,7 @@
         const rowInline = document.createElement("div");
         rowInline.className = "row-inline";
         const input = document.createElement("input");
-        input.type = "text";
-        input.placeholder = "Название команды (например, NAVI)";
-        input.autocomplete = "off";
+        input.type = "text"; input.placeholder = "Название команды (например, NAVI)"; input.autocomplete = "off";
         if (layer.team) input.value = layer.team;
         const btn = document.createElement("button");
         btn.type = "button"; btn.className = "primary"; btn.textContent = "Применить";
@@ -1846,9 +1973,7 @@
         const rowInline = document.createElement("div");
         rowInline.className = "row-inline";
         const input = document.createElement("input");
-        input.type = "text";
-        input.placeholder = "Ник игрока (например, s1mple)";
-        input.autocomplete = "off";
+        input.type = "text"; input.placeholder = "Ник игрока (например, s1mple)"; input.autocomplete = "off";
         if (layer.player) input.value = layer.player;
         const btn = document.createElement("button");
         btn.type = "button"; btn.className = "primary"; btn.textContent = "Применить";
@@ -1890,9 +2015,7 @@
         const rowInline = document.createElement("div");
         rowInline.className = "row-inline";
         const input = document.createElement("input");
-        input.type = "text";
-        input.placeholder = "https://example.com/new-image.png";
-        input.autocomplete = "off";
+        input.type = "text"; input.placeholder = "https://example.com/new-image.png"; input.autocomplete = "off";
         const btn = document.createElement("button");
         btn.type = "button"; btn.className = "primary"; btn.textContent = "Заменить";
         rowInline.appendChild(input); rowInline.appendChild(btn);
@@ -1922,22 +2045,14 @@
         arr.forEach(item => {
             if (!item || !item.src) return;
             const l = createLayer({
-                src: item.src,
-                kind: item.kind,
-                role: item.role,
-                name: item.name,
-                team: item.team,
-                player: item.player,
-                offsetX: Number(item.offsetX) || 0,
-                offsetY: Number(item.offsetY) || 0,
-                x: Number(item.x),
-                y: Number(item.y),
-                scale: Number(item.scale),
-                autoOffset: false,
+                src: item.src, kind: item.kind, role: item.role, name: item.name,
+                team: item.team, player: item.player,
+                offsetX: Number(item.offsetX) || 0, offsetY: Number(item.offsetY) || 0,
+                x: Number(item.x), y: Number(item.y), scale: Number(item.scale),
+                autoOffset: false, selectAfter: false,
             });
             if (l) created.push({ srcItem: item, layer: l });
         });
-
         created.forEach(({ srcItem, layer }) => {
             if (srcItem.maskId) {
                 const maskSrc = arr.find(x => x && String(x.id) === String(srcItem.maskId));
@@ -1950,7 +2065,6 @@
                 }
             }
         });
-
         updateMaskParentStyles();
         renderViewerFields();
     } else {
