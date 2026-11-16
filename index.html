@@ -53,6 +53,8 @@
     .layer.selected { outline-color: rgba(154, 92, 248, .9); }
     .layer.selected-primary { outline-color: rgba(154, 92, 248, 1); outline-width: 3px; }
     .layer.mask-parent { outline: 2px dashed rgba(255, 165, 0, .8); }
+    .layer.locked { cursor: not-allowed; }
+    .layer.locked img { opacity: .85; }
     .layer img {
         display: block; width: 100%; height: 100%;
         pointer-events: none; user-select: none;
@@ -172,6 +174,7 @@
         font-size: 14px; font-weight: 600; color: var(--color-ink);
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
+    .layer-item.locked .layer-name::after { content: " 🔒"; }
     .layer-name-edit {
         width: 100%; border: 1px solid var(--color-accent); border-radius: 6px;
         padding: 3px 6px; font-size: 14px; font-weight: 600; color: var(--color-ink);
@@ -190,12 +193,20 @@
     }
     .layer-role.mask-role { background: #ffe0b3; color: #8a4b00; }
     .layer-role.mask-parent-role { background: #ffd1d1; color: #8a1a1a; }
+    .layer-role.locked-role { background: #e0e0e0; color: #555; }
     .layer-remove {
         border: 0; background: transparent; cursor: pointer;
         color: #c0392b; font-size: 18px; line-height: 1;
         padding: 4px 8px; border-radius: 6px;
     }
     .layer-remove:hover { background: #fdecec; }
+    .lock-btn {
+        border: 0; background: transparent; cursor: pointer;
+        font-size: 16px; line-height: 1; padding: 4px 6px; border-radius: 6px;
+        color: var(--color-navy);
+    }
+    .lock-btn:hover { background: #e5e5ea; }
+    .lock-btn.is-locked { color: #c0392b; }
     .empty-layers {
         font-size: 13px; color: var(--color-muted);
         text-align: center; padding: 14px 0;
@@ -315,7 +326,16 @@
                     <button type="button" class="step-btn" id="offYInc" title="+1">+</button>
                 </div>
             </div>
-            <div class="hint">Картинка двигается внутри маски. Тяните её мышкой прямо на холсте.</div>
+            <div class="slider-row">
+                <label for="imgScale">Масштаб картинки</label>
+                <input type="range" id="imgScale" min="0.2" max="5" step="0.01" value="1" />
+                <div class="num-group">
+                    <button type="button" class="step-btn" id="imgScaleDec" title="−0.01">−</button>
+                    <input type="number" id="imgScaleNum" class="num-input" step="0.01" min="0.2" max="5" value="1" />
+                    <button type="button" class="step-btn" id="imgScaleInc" title="+0.01">+</button>
+                </div>
+            </div>
+            <div class="hint">Картинка двигается и масштабируется внутри маски. Тяните её мышкой прямо на холсте; Alt/Shift + колесо — масштаб картинки.</div>
         </div>
 
         <div class="actions">
@@ -388,6 +408,7 @@
         <div class="hint">
             Клик — выделить один. Ctrl/Cmd+клик — добавить/убрать из выделения.
             Shift+клик — выделить диапазон. При мультивыборе ползунки X/Y/Масштаб — это сдвиг для всех.
+            Кнопка 🔒 блокирует слой от случайного перемещения.
         </div>
         <div class="layers-list" id="layersList">
             <div class="empty-layers" id="emptyLayers">Пока нет слоёв</div>
@@ -506,6 +527,11 @@
     const $offYDec = document.getElementById("offYDec");
     const $offYInc = document.getElementById("offYInc");
 
+    const $imgScale = document.getElementById("imgScale");
+    const $imgScaleNum = document.getElementById("imgScaleNum");
+    const $imgScaleDec = document.getElementById("imgScaleDec");
+    const $imgScaleInc = document.getElementById("imgScaleInc");
+
     const $dupBtn = document.getElementById("dupBtn");
     const $removeSelectedBtn = document.getElementById("removeSelectedBtn");
     const $upBtn = document.getElementById("upBtn");
@@ -598,11 +624,12 @@
     function getSelectedLayers() { return selectedIds.map(id => getLayer(id)).filter(Boolean); }
 
     // -------- Создание слоя --------
-    function createLayer({ team = null, player = null, src, name = null, kind = "logo", role = "", maskId = null, offsetX = 0, offsetY = 0, x, y, scale, autoOffset = false, selectAfter = true }) {
+    function createLayer({ team = null, player = null, src, name = null, kind = "logo", role = "", maskId = null, offsetX = 0, offsetY = 0, imgScale = 1, locked = false, x, y, scale, autoOffset = false, selectAfter = true }) {
         if (!src) return null;
         const id = nextId++;
         const el = document.createElement("div");
         el.className = "layer";
+        if (locked) el.classList.add("locked");
         el.dataset.id = String(id);
 
         const clip = document.createElement("div");
@@ -621,6 +648,8 @@
             maskId: maskId || null,
             offsetX: (typeof offsetX === "number" && isFinite(offsetX)) ? offsetX : 0,
             offsetY: (typeof offsetY === "number" && isFinite(offsetY)) ? offsetY : 0,
+            imgScale: (typeof imgScale === "number" && isFinite(imgScale) && imgScale > 0) ? imgScale : 1,
+            locked: !!locked,
             x: (typeof x === "number" && isFinite(x)) ? x : BOARD_SIZE / 2,
             y: (typeof y === "number" && isFinite(y)) ? y : BOARD_SIZE / 2,
             scale: (typeof scale === "number" && isFinite(scale) && scale > 0) ? scale : 1,
@@ -721,6 +750,7 @@
         layer.imgEl.style.height = "";
         layer.imgEl.style.objectFit = "";
         layer.imgEl.style.transform = "";
+        layer.imgEl.style.transformOrigin = "";
 
         if (!layer.maskId) return;
         const mask = getLayer(layer.maskId);
@@ -749,7 +779,8 @@
         layer.imgEl.style.width = "100%";
         layer.imgEl.style.height = "100%";
         layer.imgEl.style.objectFit = "cover";
-        layer.imgEl.style.transform = `translate(${layer.offsetX}px, ${layer.offsetY}px)`;
+        layer.imgEl.style.transformOrigin = "center center";
+        layer.imgEl.style.transform = `translate(${layer.offsetX}px, ${layer.offsetY}px) scale(${layer.imgScale || 1})`;
     }
 
     function syncChildrenOfMask(maskId) {
@@ -807,7 +838,6 @@
         });
         if (primaryId !== null) lastClickedIndex = layers.findIndex(l => l.id === primaryId);
 
-        // при переходе в/из мультирежима сбрасываем базовую точку
         if (prevMulti !== (selectedIds.length > 1)) {
             resetMultiBase();
         }
@@ -912,23 +942,24 @@
         const layer = getPrimary();
         if (!layer) { $selTitle.textContent = "Настройки слоя"; return; }
         const kindLabel = layer.kind === "image" ? "картинка" : "логотип";
-        $selTitle.textContent = `Настройки слоя: ${layer.name || kindLabel}`;
+        $selTitle.textContent = `Настройки слоя: ${layer.name || kindLabel}${layer.locked ? " 🔒" : ""}`;
     }
 
     function updateControlsState() {
         const hasAny = selectedIds.length > 0;
         const hasOne = selectedIds.length === 1 && !!getPrimary();
         const multi = selectedIds.length > 1;
+        const locked = hasOne && getPrimary() && getPrimary().locked;
 
-        [$posX, $posY, $posXNum, $posYNum].forEach($el => { if ($el) $el.disabled = !hasAny; });
-        [$posXDec, $posXInc, $posYDec, $posYInc].forEach($el => { if ($el) $el.disabled = !hasAny; });
-        if ($scale) $scale.disabled = !hasAny;
-        if ($scaleNum) $scaleNum.disabled = !hasAny;
-        if ($scaleDec) $scaleDec.disabled = !hasAny;
-        if ($scaleInc) $scaleInc.disabled = !hasAny;
+        [$posX, $posY, $posXNum, $posYNum, $posXDec, $posXInc, $posYDec, $posYInc].forEach($el => {
+            if ($el) $el.disabled = !hasAny || locked;
+        });
+        [$scale, $scaleNum, $scaleDec, $scaleInc].forEach($el => {
+            if ($el) $el.disabled = !hasAny || locked;
+        });
 
-        if ($centerBtn) $centerBtn.disabled = !hasAny;
-        if ($resetBtn) $resetBtn.disabled = !hasAny;
+        if ($centerBtn) $centerBtn.disabled = !hasAny || locked;
+        if ($resetBtn) $resetBtn.disabled = !hasAny || locked;
         if ($removeBtn) $removeBtn.disabled = !hasAny;
 
         if ($layerName) $layerName.disabled = !hasOne;
@@ -942,12 +973,18 @@
         if ($upBtn) $upBtn.disabled = !hasOne || idx === layers.length - 1;
         if ($downBtn) $downBtn.disabled = !hasOne || idx === 0;
 
-        // Мультирежим: показываем подсказку, поля X/Y/scale показывают 0/1 (дельта)
         if ($multiHint) $multiHint.classList.toggle("hidden", !multi);
         if ($multiCount) $multiCount.textContent = String(selectedIds.length);
         if ($posXNum) $posXNum.classList.toggle("multi-hint", multi);
         if ($posYNum) $posYNum.classList.toggle("multi-hint", multi);
         if ($scaleNum) $scaleNum.classList.toggle("multi-hint", multi);
+
+        // Смещение и масштаб картинки — только когда есть маска и слой не заблокирован
+        const hasOffset = hasOne && getPrimary() && getPrimary().maskId && !locked;
+        [$offX, $offY, $offXNum, $offYNum, $offXDec, $offXInc, $offYDec, $offYInc,
+         $imgScale, $imgScaleNum, $imgScaleDec, $imgScaleInc].forEach($el => {
+            if ($el) $el.disabled = !hasOffset;
+        });
 
         if (!hasAny) {
             if ($layerName) $layerName.value = "";
@@ -969,7 +1006,6 @@
     function syncControlsWithSelected() {
         const multi = selectedIds.length > 1;
         if (multi) {
-            // В мультирежиме поля X/Y показывают «дельта 0», scale — «дельта 0»
             if ($posX) $posX.value = 0;
             if ($posY) $posY.value = 0;
             if ($scale) $scale.value = 1;
@@ -999,6 +1035,8 @@
         if ($offY) $offY.value = Math.round(layer.offsetY);
         if ($offXNum) $offXNum.value = Math.round(layer.offsetX);
         if ($offYNum) $offYNum.value = Math.round(layer.offsetY);
+        if ($imgScale) $imgScale.value = (layer.imgScale || 1).toFixed(2);
+        if ($imgScaleNum) $imgScaleNum.value = (layer.imgScale || 1).toFixed(2);
     }
 
     function renderLayersList() {
@@ -1014,7 +1052,7 @@
             const item = document.createElement("div");
             const isSel = selectedIds.includes(layer.id);
             const isPrimary = layer.id === primaryId;
-            item.className = "layer-item" + (isSel ? " selected" : "") + (isPrimary ? " selected-primary" : "");
+            item.className = "layer-item" + (isSel ? " selected" : "") + (isPrimary ? " selected-primary" : "") + (layer.locked ? " locked" : "");
             item.dataset.id = String(layer.id);
 
             const thumb = document.createElement("div");
@@ -1032,7 +1070,7 @@
             const coords = document.createElement("div");
             coords.className = "layer-coords";
             let t = `X: ${Math.round(layer.x)} · Y: ${Math.round(layer.y)} · ${Math.round(layer.scale * 100)}%`;
-            if (layer.maskId) t += ` · внутри: ${Math.round(layer.offsetX)},${Math.round(layer.offsetY)}`;
+            if (layer.maskId) t += ` · внутри: ${Math.round(layer.offsetX)},${Math.round(layer.offsetY)} · картинка ${Math.round((layer.imgScale || 1) * 100)}%`;
             coords.textContent = t;
             meta.appendChild(name);
             meta.appendChild(coords);
@@ -1056,6 +1094,22 @@
                 p.textContent = "служит маской";
                 meta.appendChild(p);
             }
+            if (layer.locked) {
+                const lockEl = document.createElement("div");
+                lockEl.className = "layer-role locked-role";
+                lockEl.textContent = "заблокирован";
+                meta.appendChild(lockEl);
+            }
+
+            const lockBtn = document.createElement("button");
+            lockBtn.type = "button";
+            lockBtn.className = "lock-btn" + (layer.locked ? " is-locked" : "");
+            lockBtn.title = layer.locked ? "Разблокировать слой" : "Заблокировать слой";
+            lockBtn.textContent = layer.locked ? "🔒" : "🔓";
+            lockBtn.addEventListener("click", e => {
+                e.stopPropagation();
+                setLayerLocked(layer.id, !layer.locked);
+            });
 
             const rm = document.createElement("button");
             rm.className = "layer-remove";
@@ -1073,6 +1127,7 @@
 
             item.appendChild(thumb);
             item.appendChild(meta);
+            item.appendChild(lockBtn);
             item.appendChild(rm);
             $layersList.appendChild(item);
         });
@@ -1132,7 +1187,7 @@
         const coords = item.querySelector(".layer-coords");
         if (coords) {
             let t = `X: ${Math.round(layer.x)} · Y: ${Math.round(layer.y)} · ${Math.round(layer.scale * 100)}%`;
-            if (layer.maskId) t += ` · внутри: ${Math.round(layer.offsetX)},${Math.round(layer.offsetY)}`;
+            if (layer.maskId) t += ` · внутри: ${Math.round(layer.offsetX)},${Math.round(layer.offsetY)} · картинка ${Math.round((layer.imgScale || 1) * 100)}%`;
             coords.textContent = t;
         }
     }
@@ -1188,6 +1243,8 @@
                 kind: orig.kind, role: orig.role,
                 maskId: maskInSelection ? null : orig.maskId,
                 offsetX: orig.offsetX, offsetY: orig.offsetY,
+                imgScale: orig.imgScale || 1,
+                locked: orig.locked,
                 x: orig.x, y: orig.y, scale: orig.scale,
                 autoOffset: false, selectAfter: false,
             });
@@ -1214,6 +1271,29 @@
         }
     }
 
+    // ============ БЛОКИРОВКА ============
+    function setLayerLocked(id, locked) {
+        const l = getLayer(id);
+        if (!l) return;
+        l.locked = !!locked;
+        if (l.el) l.el.classList.toggle("locked", l.locked);
+        renderLayersList();
+        updateControlsState();
+        updateOffsetCard();
+        syncControlsWithSelected();
+        setStatus(l.locked ? "Слой заблокирован" : "Слой разблокирован", "info");
+    }
+
+    function applyImgScale(v) {
+        const l = getPrimary();
+        if (!l || !l.maskId || l.locked) return;
+        l.imgScale = clamp(v, 0.2, 5);
+        applyMaskToLayer(l);
+        if ($imgScale) $imgScale.value = l.imgScale.toFixed(2);
+        if ($imgScaleNum) $imgScaleNum.value = l.imgScale.toFixed(2);
+        refreshLayerItem(l);
+    }
+
     // ============ МУЛЬТИРЕЖИМ ПОЛЗУНКОВ ============
     function resetMultiBase() {
         multiBaseX = 0;
@@ -1225,7 +1305,7 @@
     function takeMultiSnapshot() {
         multiSnapshot = new Map();
         getSelectedLayers().forEach(l => {
-            // Для слоя с маской «двигаем маску». Учитываем это в снапшоте.
+            if (l.locked) return;
             if (l.maskId) {
                 const mask = getLayer(l.maskId);
                 if (mask && !selectedIds.includes(mask.id)) {
@@ -1235,7 +1315,6 @@
                     return;
                 }
                 if (mask && selectedIds.includes(mask.id)) {
-                    // маска сама в выделении — её снапшот возьмётся отдельным проходом
                     return;
                 }
             }
@@ -1249,15 +1328,13 @@
         if (!multiSnapshot) takeMultiSnapshot();
         multiSnapshot.forEach(s => {
             const l = getLayer(s.id);
-            if (!l) return;
+            if (!l || l.locked) return;
             l.x = s.x + dx;
             applyLayerTransform(l);
             syncChildrenOfMask(l.id);
             refreshLayerItem(l);
         });
-        // пересобрать позиции картинок с масками
-        getSelectedLayers().forEach(l => { if (l.maskId) applyMaskToLayer(l); });
-        // и на всякий случай пересобрать у всех «родителей»
+        getSelectedLayers().forEach(l => { if (l.maskId && !l.locked) applyMaskToLayer(l); });
         multiSnapshot.forEach(s => syncChildrenOfMask(s.id));
     }
 
@@ -1265,13 +1342,13 @@
         if (!multiSnapshot) takeMultiSnapshot();
         multiSnapshot.forEach(s => {
             const l = getLayer(s.id);
-            if (!l) return;
+            if (!l || l.locked) return;
             l.y = s.y + dy;
             applyLayerTransform(l);
             syncChildrenOfMask(l.id);
             refreshLayerItem(l);
         });
-        getSelectedLayers().forEach(l => { if (l.maskId) applyMaskToLayer(l); });
+        getSelectedLayers().forEach(l => { if (l.maskId && !l.locked) applyMaskToLayer(l); });
         multiSnapshot.forEach(s => syncChildrenOfMask(s.id));
     }
 
@@ -1279,7 +1356,7 @@
         if (!multiSnapshot) takeMultiSnapshot();
         multiSnapshot.forEach(s => {
             const l = getLayer(s.id);
-            if (!l) return;
+            if (!l || l.locked) return;
             const newScale = clamp(s.scale + delta, 0.05, 3);
             l.scale = newScale;
             applyLayerTransform(l);
@@ -1287,7 +1364,7 @@
             syncChildrenOfMask(l.id);
             refreshLayerItem(l);
         });
-        getSelectedLayers().forEach(l => { if (l.maskId) applyMaskToLayer(l); });
+        getSelectedLayers().forEach(l => { if (l.maskId && !l.locked) applyMaskToLayer(l); });
         multiSnapshot.forEach(s => syncChildrenOfMask(s.id));
     }
 
@@ -1397,7 +1474,7 @@
                 }
             }
             layer.maskId = newId;
-            if (newId) { layer.offsetX = 0; layer.offsetY = 0; }
+            if (newId) { layer.offsetX = 0; layer.offsetY = 0; layer.imgScale = 1; }
             applyMaskToLayer(layer);
             renderLayersList();
             updateOffsetCard();
@@ -1406,10 +1483,9 @@
             setStatus(`Маска слоя: ${newId ? (getLayer(newId)?.name || "#" + newId) : "—"}`, "info");
         });
 
-        // ----- Единые обработчики X / Y / Scale -----
-        // В мультирежиме: значение поля/ползунка = ДЕЛЬТА от базовой точки.
-        // В одиночном: значение = абсолютная координата.
         function applyXInput(rawValue) {
+            const l0 = getPrimary();
+            if (!l0 || l0.locked) return;
             if (selectedIds.length > 1) {
                 const dx = rawValue;
                 applyDeltaX(dx);
@@ -1417,7 +1493,7 @@
                 if ($posXNum) $posXNum.value = Math.round(dx);
                 return;
             }
-            const l = getPrimary(); if (!l) return;
+            const l = l0;
             const v = clamp(rawValue, -1000, 2000);
             if (l.maskId) {
                 const mask = getLayer(l.maskId);
@@ -1430,6 +1506,8 @@
             refreshLayerItem(l);
         }
         function applyYInput(rawValue) {
+            const l0 = getPrimary();
+            if (!l0 || l0.locked) return;
             if (selectedIds.length > 1) {
                 const dy = rawValue;
                 applyDeltaY(dy);
@@ -1437,7 +1515,7 @@
                 if ($posYNum) $posYNum.value = Math.round(dy);
                 return;
             }
-            const l = getPrimary(); if (!l) return;
+            const l = l0;
             const v = clamp(rawValue, -1000, 2000);
             if (l.maskId) {
                 const mask = getLayer(l.maskId);
@@ -1450,14 +1528,16 @@
             refreshLayerItem(l);
         }
         function applyScaleInput(rawValue) {
+            const l0 = getPrimary();
+            if (!l0 || l0.locked) return;
             if (selectedIds.length > 1) {
-                const delta = rawValue; // дельта масштаба
+                const delta = rawValue;
                 applyDeltaScale(delta);
                 if ($scale) $scale.value = clamp(1 + delta, 0.05, 3).toFixed(2);
                 if ($scaleNum) $scaleNum.value = Math.round(delta * 100) / 100;
                 return;
             }
-            const l = getPrimary(); if (!l) return;
+            const l = l0;
             const v = clamp(rawValue, 0.05, 3);
             if (l.maskId) {
                 const mask = getLayer(l.maskId);
@@ -1470,7 +1550,8 @@
             refreshLayerItem(l);
         }
         function applyOffsetX(v) {
-            const l = getPrimary(); if (!l || !l.maskId) return;
+            const l = getPrimary();
+            if (!l || !l.maskId || l.locked) return;
             l.offsetX = v;
             applyMaskToLayer(l);
             if ($offX) $offX.value = Math.round(v);
@@ -1478,7 +1559,8 @@
             refreshLayerItem(l);
         }
         function applyOffsetY(v) {
-            const l = getPrimary(); if (!l || !l.maskId) return;
+            const l = getPrimary();
+            if (!l || !l.maskId || l.locked) return;
             l.offsetY = v;
             applyMaskToLayer(l);
             if ($offY) $offY.value = Math.round(v);
@@ -1486,7 +1568,6 @@
             refreshLayerItem(l);
         }
 
-        // При начале взаимодействия с ползунками — снимаем снапшот, если мультивыбор
         function onSliderInteractionStart() {
             if (selectedIds.length > 1 && !multiSnapshot) {
                 takeMultiSnapshot();
@@ -1519,10 +1600,10 @@
             }
         });
         $scale.addEventListener("input", () => {
-            const v = parseFloat($scale.value); // 1..3, это множитель
+            const v = parseFloat($scale.value);
             if (selectedIds.length > 1) {
                 onSliderInteractionStart();
-                const delta = v - 1; // -0.95..2
+                const delta = v - 1;
                 applyDeltaScale(delta);
                 if ($scaleNum) $scaleNum.value = Math.round(delta * 100) / 100;
             } else {
@@ -1530,7 +1611,6 @@
             }
         });
 
-        // Числовые поля X/Y
         $posXNum.addEventListener("input", () => {
             const v = parseFloat($posXNum.value);
             if (Number.isNaN(v)) return;
@@ -1575,90 +1655,45 @@
         $offXNum.addEventListener("blur", () => syncControlsWithSelected());
         $offYNum.addEventListener("blur", () => syncControlsWithSelected());
 
-        // Кнопки −/+
+        $imgScale.addEventListener("input", () => applyImgScale(parseFloat($imgScale.value)));
+        $imgScaleNum.addEventListener("input", () => { const v = parseFloat($imgScaleNum.value); if (!Number.isNaN(v)) applyImgScale(v); });
+        $imgScaleNum.addEventListener("blur", () => syncControlsWithSelected());
+        $imgScaleDec.addEventListener("click", () => { const l = getPrimary(); if (!l || l.locked) return; applyImgScale((l.imgScale || 1) - 0.01); });
+        $imgScaleInc.addEventListener("click", () => { const l = getPrimary(); if (!l || l.locked) return; applyImgScale((l.imgScale || 1) + 0.01); });
+
         $posXDec.addEventListener("click", () => {
-            if (selectedIds.length > 1) {
-                onSliderInteractionStart();
-                const l = getPrimary(); const v = (l ? l.x : 0) - 1;
-                applyDeltaX(v);
-                if ($posX) $posX.value = clamp(v, -1000, 2000);
-                if ($posXNum) $posXNum.value = Math.round(v);
-                return;
-            }
-            const l = getPrimary(); if (!l) return;
+            const l = getPrimary(); if (!l || l.locked) return;
             applyXInput(Math.round(l.x) - 1);
         });
         $posXInc.addEventListener("click", () => {
-            if (selectedIds.length > 1) {
-                onSliderInteractionStart();
-                const l = getPrimary(); const v = (l ? l.x : 0) + 1;
-                applyDeltaX(v);
-                if ($posX) $posX.value = clamp(v, -1000, 2000);
-                if ($posXNum) $posXNum.value = Math.round(v);
-                return;
-            }
-            const l = getPrimary(); if (!l) return;
+            const l = getPrimary(); if (!l || l.locked) return;
             applyXInput(Math.round(l.x) + 1);
         });
         $posYDec.addEventListener("click", () => {
-            if (selectedIds.length > 1) {
-                onSliderInteractionStart();
-                const l = getPrimary(); const v = (l ? l.y : 0) - 1;
-                applyDeltaY(v);
-                if ($posY) $posY.value = clamp(v, -1000, 2000);
-                if ($posYNum) $posYNum.value = Math.round(v);
-                return;
-            }
-            const l = getPrimary(); if (!l) return;
+            const l = getPrimary(); if (!l || l.locked) return;
             applyYInput(Math.round(l.y) - 1);
         });
         $posYInc.addEventListener("click", () => {
-            if (selectedIds.length > 1) {
-                onSliderInteractionStart();
-                const l = getPrimary(); const v = (l ? l.y : 0) + 1;
-                applyDeltaY(v);
-                if ($posY) $posY.value = clamp(v, -1000, 2000);
-                if ($posYNum) $posYNum.value = Math.round(v);
-                return;
-            }
-            const l = getPrimary(); if (!l) return;
+            const l = getPrimary(); if (!l || l.locked) return;
             applyYInput(Math.round(l.y) + 1);
         });
         $scaleDec.addEventListener("click", () => {
-            if (selectedIds.length > 1) {
-                onSliderInteractionStart();
-                applyDeltaScale(-0.01);
-                if ($scale) $scale.value = (1 - 0.01).toFixed(2);
-                if ($scaleNum) $scaleNum.value = "-0.01";
-                return;
-            }
-            const l = getPrimary(); if (!l) return;
+            const l = getPrimary(); if (!l || l.locked) return;
             applyScaleInput(Math.round((l.scale - 0.01) * 100) / 100);
         });
         $scaleInc.addEventListener("click", () => {
-            if (selectedIds.length > 1) {
-                onSliderInteractionStart();
-                applyDeltaScale(0.01);
-                if ($scale) $scale.value = (1 + 0.01).toFixed(2);
-                if ($scaleNum) $scaleNum.value = "0.01";
-                return;
-            }
-            const l = getPrimary(); if (!l) return;
+            const l = getPrimary(); if (!l || l.locked) return;
             applyScaleInput(Math.round((l.scale + 0.01) * 100) / 100);
         });
-        $offXDec.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyOffsetX(Math.round(l.offsetX) - 1); });
-        $offXInc.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyOffsetX(Math.round(l.offsetX) + 1); });
-        $offYDec.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyOffsetY(Math.round(l.offsetY) - 1); });
-        $offYInc.addEventListener("click", () => { const l = getPrimary(); if (!l) return; applyOffsetY(Math.round(l.offsetY) + 1); });
+        $offXDec.addEventListener("click", () => { const l = getPrimary(); if (!l || l.locked) return; applyOffsetX(Math.round(l.offsetX) - 1); });
+        $offXInc.addEventListener("click", () => { const l = getPrimary(); if (!l || l.locked) return; applyOffsetX(Math.round(l.offsetX) + 1); });
+        $offYDec.addEventListener("click", () => { const l = getPrimary(); if (!l || l.locked) return; applyOffsetY(Math.round(l.offsetY) - 1); });
+        $offYInc.addEventListener("click", () => { const l = getPrimary(); if (!l || l.locked) return; applyOffsetY(Math.round(l.offsetY) + 1); });
 
         $centerBtn.addEventListener("click", () => {
-            const sel = getSelectedLayers();
+            const sel = getSelectedLayers().filter(l => !l.locked);
             if (!sel.length) return;
             if (sel.length > 1) {
-                // Для мультирежима «по центру» — двигаем всех так, чтобы их «центр масс» оказался в центре
-                // Но проще и предсказуемее: ставим КАЖДОМУ X=500, Y=500 — как и раньше.
-                // Но вы просили «не одинаковые». Тогда сделаем сдвиг: двигаем группу так,
-                // чтобы её bbox-центр оказался в центре холста.
                 let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
                 sel.forEach(l => {
                     const w = l.baseW * l.scale, h = l.baseH * l.scale;
@@ -1671,7 +1706,7 @@
                 const cy = (minY + maxY) / 2;
                 const dx = BOARD_SIZE / 2 - cx;
                 const dy = BOARD_SIZE / 2 - cy;
-                multiSnapshot = null; // сброс перед групповым сдвигом
+                multiSnapshot = null;
                 takeMultiSnapshot();
                 applyDeltaX(dx);
                 applyDeltaY(dy);
@@ -1680,7 +1715,8 @@
                 sel.forEach(l => refreshLayerItem(l));
                 return;
             }
-            const l = getPrimary(); if (!l) return;
+            const l = getPrimary();
+            if (!l || l.locked) return;
             if (l.maskId) {
                 const mask = getLayer(l.maskId);
                 if (mask) { mask.x = BOARD_SIZE / 2; mask.y = BOARD_SIZE / 2; applyLayerTransform(mask); applyMaskToLayer(l); syncChildrenOfMask(mask.id); }
@@ -1692,11 +1728,11 @@
             refreshLayerItem(l);
         });
         $resetBtn.addEventListener("click", () => {
+            const sel = getSelectedLayers().filter(l => !l.locked);
+            if (!sel.length) return;
             if (selectedIds.length > 1) {
-                // сбрасываем масштаб у всех к 1 (одинаковое — это ок для сброса)
                 multiSnapshot = null;
                 takeMultiSnapshot();
-                const sel = getSelectedLayers();
                 sel.forEach(l => {
                     if (l.maskId) {
                         const mask = getLayer(l.maskId);
@@ -1712,8 +1748,9 @@
                 sel.forEach(l => refreshLayerItem(l));
                 return;
             }
-            const l = getPrimary(); if (!l) return;
-            if (l.maskId) { l.offsetX = 0; l.offsetY = 0; applyMaskToLayer(l); }
+            const l = getPrimary();
+            if (!l || l.locked) return;
+            if (l.maskId) { l.offsetX = 0; l.offsetY = 0; l.imgScale = 1; applyMaskToLayer(l); }
             else { l.scale = 1; applyLayerTransform(l); applyMaskToLayer(l); syncChildrenOfMask(l.id); }
             syncControlsWithSelected();
             refreshLayerItem(l);
@@ -1846,6 +1883,8 @@
             else if (e.ctrlKey || e.metaKey) { toggleInSelection(hit.id); return; }
             else setSelection([hit.id], hit.id);
 
+            if (hit.locked) return;
+
             $board.setPointerCapture(e.pointerId);
             pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
             $board.classList.add("dragging");
@@ -1869,12 +1908,12 @@
             const targets = [];
             selectedIds.forEach(id => {
                 const l = getLayer(id);
-                if (!l) return;
+                if (!l || l.locked) return;
                 if (l.maskId) {
                     if (selectedIds.includes(l.maskId)) return;
                     if (byMaskId.has(l.maskId)) return;
                     const mask = getLayer(l.maskId);
-                    if (!mask) return;
+                    if (!mask || mask.locked) return;
                     byMaskId.add(l.maskId);
                     targets.push({ obj: mask, isMask: true });
                 } else {
@@ -1894,11 +1933,12 @@
             const dist = pts.length >= 2 ? Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) : 1;
 
             const insideClip = layer && layer.maskId && cx && cy ? isPointInClip(layer, cx, cy) : false;
-            const singleWithMaskInside = selectedIds.length === 1 && layer && layer.maskId && insideClip;
+            const singleWithMaskInside = selectedIds.length === 1 && layer && layer.maskId && insideClip && !layer.locked;
 
-            const targets = singleWithMaskInside
+            const targets = (singleWithMaskInside
                 ? [{ obj: layer, isMask: false }]
-                : buildDragTargets();
+                : buildDragTargets()
+            ).filter(t => t.obj && !t.obj.locked);
 
             const starts = targets.map(t => ({
                 obj: t.obj,
@@ -1921,7 +1961,7 @@
 
         function updateGesture() {
             const layer = drag ? getLayer(drag.layerId) : null;
-            if (!layer) return;
+            if (!layer || layer.locked) return;
             const pts = [...pointers.values()];
             const midClient = {
                 x: pts.reduce((s, p) => s + p.x, 0) / pts.length,
@@ -1964,7 +2004,7 @@
 
             drag.starts.forEach(st => {
                 const o = st.obj;
-                if (!o) return;
+                if (!o || o.locked) return;
                 o.x = st.startX + dx;
                 o.y = st.startY + dy;
                 applyLayerTransform(o);
@@ -1978,7 +2018,7 @@
         $board.addEventListener("wheel", e => {
             if (IS_TEMPLATE) return;
             const hit = hitLayerAt(e.clientX, e.clientY);
-            if (!hit) return;
+            if (!hit || hit.locked) return;
             e.preventDefault();
             if (hit.id !== primaryId) setSelection([hit.id], hit.id);
             const layer = getLayer(hit.id);
@@ -1986,10 +2026,11 @@
             const zoomInside = e.altKey || e.shiftKey;
 
             if (hit.maskId && zoomInside) {
-                if (!layer._imgScale) layer._imgScale = 1;
-                layer._imgScale = clamp(layer._imgScale * factor, 0.2, 5);
-                layer.imgEl.style.transformOrigin = "center center";
-                layer.imgEl.style.transform = `translate(${layer.offsetX}px, ${layer.offsetY}px) scale(${layer._imgScale})`;
+                layer.imgScale = clamp((layer.imgScale || 1) * factor, 0.2, 5);
+                applyMaskToLayer(layer);
+                if ($imgScale) $imgScale.value = layer.imgScale.toFixed(2);
+                if ($imgScaleNum) $imgScaleNum.value = layer.imgScale.toFixed(2);
+                refreshLayerItem(layer);
                 return;
             }
 
@@ -2027,6 +2068,8 @@
             maskId: l.maskId || null,
             offsetX: Math.round(l.offsetX * 100) / 100,
             offsetY: Math.round(l.offsetY * 100) / 100,
+            imgScale: Math.round((l.imgScale || 1) * 1000) / 1000,
+            locked: !!l.locked,
             x: Math.round(l.x * 100) / 100,
             y: Math.round(l.y * 100) / 100,
             scale: Math.round(l.scale * 1000) / 1000,
@@ -2115,6 +2158,8 @@
                     player: String(item.player || "").trim() || null,
                     offsetX: Number(item.offsetX) || 0,
                     offsetY: Number(item.offsetY) || 0,
+                    imgScale: Number(item.imgScale) || 1,
+                    locked: !!item.locked,
                     x: Number(item.x), y: Number(item.y), scale: Number(item.scale),
                     autoOffset: false, selectAfter: false,
                 });
@@ -2288,6 +2333,8 @@
                 src: item.src, kind: item.kind, role: item.role, name: item.name,
                 team: item.team, player: item.player,
                 offsetX: Number(item.offsetX) || 0, offsetY: Number(item.offsetY) || 0,
+                imgScale: Number(item.imgScale) || 1,
+                locked: !!item.locked,
                 x: Number(item.x), y: Number(item.y), scale: Number(item.scale),
                 autoOffset: false, selectAfter: false,
             });
