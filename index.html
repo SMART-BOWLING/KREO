@@ -713,7 +713,6 @@
         if (isText) {
             layer.baseW = 100;
             layer.baseH = 100;
-            // Auto-size text
             setTimeout(() => {
                 if (!layer.el) return;
                 const w = clip.scrollWidth || 100;
@@ -864,9 +863,6 @@
             layer.imgEl.style.objectFit = "cover";
             layer.imgEl.style.transformOrigin = "center center";
             layer.imgEl.style.transform = `translate(${layer.offsetX}px, ${layer.offsetY}px) scale(${layer.imgScale || 1})`;
-        } else if (layer.kind === "text") {
-             // For text, we can keep it centered, but mask clipping might distort it if scaled. 
-             // We'll just let it clip.
         }
     }
 
@@ -1073,11 +1069,14 @@
             if ($el) $el.disabled = !hasOffset;
         });
         
-        // Player text control
-        if (hasOne && cur && cur.role === "player-photo") {
+        // Player text control: show if the selected layer has a player name (or if it's a photo and there's a player associated)
+        if (hasOne && cur && (cur.role === "player-photo" || (cur.player && cur.kind !== "text"))) {
             $playerTextControl.classList.remove("hidden");
-            const textLayer = layers.find(l => l.kind === "text" && l.player === cur.player);
+            let textLayer = layers.find(l => l.kind === "text" && l.player === cur.player);
             $playerShowText.checked = !!textLayer;
+        } else if (hasOne && cur && cur.kind === "text") {
+            // If a text layer is selected, we can still show it but maybe disable or allow deletion? Let's keep it hidden.
+            $playerTextControl.classList.add("hidden");
         } else {
             $playerTextControl.classList.add("hidden");
         }
@@ -1294,7 +1293,6 @@
         }
     }
 
-    // Attach text layer to player photo
     function attachPlayerText(photoLayer, nick) {
         if (!photoLayer || !nick) return;
         let textLayer = layers.find(l => l.kind === "text" && l.player === nick);
@@ -1308,11 +1306,10 @@
             player: nick,
             locked: photoLayer.locked,
             x: photoLayer.x,
-            y: photoLayer.y + (photoLayer.baseH * photoLayer.scale) / 2 + 30, // Offset below
+            y: photoLayer.y + (photoLayer.baseH * photoLayer.scale) / 2 + 30,
             scale: photoLayer.scale,
             selectAfter: false,
         });
-        
         return textLayer;
     }
 
@@ -1328,7 +1325,6 @@
         if (!nick) return;
         const textLayer = layers.find(l => l.kind === "text" && l.player === nick);
         if (textLayer) {
-            // Keep text below photo
             textLayer.x = photoLayer.x;
             textLayer.y = photoLayer.y + (photoLayer.baseH * photoLayer.scale) / 2 + (textLayer.baseH * textLayer.scale) / 2 + 10;
             textLayer.scale = photoLayer.scale;
@@ -1422,7 +1418,6 @@
         }
     }
 
-    // ============ БЛОКИРОВКА ============
     function setLayerLocked(id, locked) {
         const l = getLayer(id);
         if (!l) return;
@@ -1445,7 +1440,6 @@
         refreshLayerItem(l);
     }
 
-    // ============ МУЛЬТИРЕЖИМ ПОЛЗУНКОВ ============
     function resetMultiBase() {
         multiBaseX = 0;
         multiBaseY = 0;
@@ -1519,7 +1513,6 @@
         multiSnapshot.forEach(s => syncChildrenOfMask(s.id));
     }
 
-    // -------- Инициализация редактора --------
     function initEditor() {
         $teamName.addEventListener("input", () => {
             clearTimeout(debounceTimer);
@@ -1609,7 +1602,13 @@
 
         $playerShowText.addEventListener("change", () => {
             const layer = getPrimary();
-            if (!layer || layer.role !== "player-photo" || !layer.player) return;
+            if (!layer) return;
+            if (layer.kind === "text") return; // don't toggle for text layer itself
+            if (!layer.player) {
+                setStatus("У слоя нет игрока. Добавьте игрока или укажите player.", "error");
+                $playerShowText.checked = false;
+                return;
+            }
             if ($playerShowText.checked) {
                 attachPlayerText(layer, layer.player);
             } else {
@@ -2001,7 +2000,6 @@
         updateOffsetCard();
     }
 
-    // ============ ЖЕСТЫ ============
     function installBoardGestures() {
         const pointers = new Map();
         let drag = null;
@@ -2234,7 +2232,6 @@
         }, { passive: false });
     }
 
-    // -------- Сериализация --------
     function serializeLayers() {
         return layers.map(l => ({
             src: l.src, kind: l.kind, role: l.role || "",
@@ -2366,7 +2363,6 @@
         }
     }
 
-    // -------- Viewer --------
     function renderViewerFields() {
         if (!IS_TEMPLATE || !$viewerFields) return;
         $viewerFields.innerHTML = "";
@@ -2461,7 +2457,6 @@
                 setLayerSrc(layer, p.photo, { newPlayer: p.nick });
                 fb.className = "fb ok"; fb.textContent = `Установлено: ${p.nick}`;
                 
-                // Update text layer if exists
                 const textLayer = layers.find(l => l.kind === "text" && l.player === oldNick);
                 if (textLayer) {
                     textLayer.player = p.nick;
@@ -2509,7 +2504,6 @@
         return group;
     }
 
-    // -------- Старт --------
     if (IS_TEMPLATE) {
         $board.classList.add("viewer");
         if ($editorControls) $editorControls.classList.add("hidden");
