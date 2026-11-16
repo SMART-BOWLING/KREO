@@ -168,6 +168,7 @@
         overflow: hidden; flex-shrink: 0;
     }
     .layer-thumb img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+    .layer-thumb.text-thumb { background: #e2e2e6; color: #666; font-size: 18px; }
     .layer-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
     .layer-name {
         font-size: 14px; font-weight: 600; color: var(--color-ink);
@@ -193,6 +194,7 @@
     .layer-role.mask-role { background: #ffe0b3; color: #8a4b00; }
     .layer-role.mask-parent-role { background: #ffd1d1; color: #8a1a1a; }
     .layer-role.locked-role { background: #e0e0e0; color: #555; }
+    .layer-role.text-role { background: #cce5ff; color: #004085; }
     .layer-remove {
         border: 0; background: transparent; cursor: pointer;
         color: #c0392b; font-size: 18px; line-height: 1;
@@ -234,6 +236,9 @@
     .viewer-controls .field-group .fb.ok { color: #13a05a; }
     .viewer-controls .field-group .fb.info { color: var(--color-muted); }
     .hidden { display: none !important; }
+
+    .checkbox-row { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--color-ink); cursor: pointer; }
+    .checkbox-row input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--color-navy); cursor: pointer; }
 </style>
 </head>
 <body>
@@ -263,6 +268,13 @@
                 <option value="static">Статичная картинка</option>
             </select>
         </label>
+
+        <div id="playerTextControl" class="hidden" style="padding-bottom: 6px;">
+            <label class="checkbox-row">
+                <input type="checkbox" id="playerShowText" />
+                <span>Показывать ник игрока (под фото)</span>
+            </label>
+        </div>
 
         <label class="row">
             <span>Маска — слой (обрезать по границам этого слоя)</span>
@@ -369,6 +381,10 @@
                 <option value="">— Без маски —</option>
             </select>
         </label>
+        <label class="checkbox-row" style="margin-top: 4px;">
+            <input type="checkbox" id="playerAddTextCheckbox" checked />
+            <span>Отображать ник игрока</span>
+        </label>
         <div class="status info" id="playerStatus">Ожидание ника игрока…</div>
     </div>
 
@@ -474,6 +490,7 @@
         "player-photo": "Фото игрока",
         "image-swap": "Картинка (по URL)",
         "static": "Статичная картинка",
+        "player-name": "Ник игрока",
     };
 
     const $board = document.getElementById("board");
@@ -489,9 +506,13 @@
     const $layerName = document.getElementById("layerName");
     const $layerRole = document.getElementById("layerRole");
     const $layerMask = document.getElementById("layerMask");
+    
+    const $playerTextControl = document.getElementById("playerTextControl");
+    const $playerShowText = document.getElementById("playerShowText");
 
     const $playerName = document.getElementById("playerName");
     const $playerMask = document.getElementById("playerMask");
+    const $playerAddTextCheckbox = document.getElementById("playerAddTextCheckbox");
     const $playerStatus = document.getElementById("playerStatus");
 
     const $imageUrl = document.getElementById("imageUrl");
@@ -621,10 +642,8 @@
     function getPrimary() { return getLayer(primaryId); }
     function getSelectedLayers() { return selectedIds.map(id => getLayer(id)).filter(Boolean); }
 
-    // Слой заблокирован «по-настоящему», если он сам locked
     function isLayerLocked(l) { return !!(l && l.locked); }
 
-    // Слой нельзя двигать, если он сам заблокирован или его маска заблокирована
     function isLayerMovementBlocked(l) {
         if (!l) return true;
         if (l.locked) return true;
@@ -636,8 +655,10 @@
     }
 
     // -------- Создание слоя --------
-    function createLayer({ team = null, player = null, src, name = null, kind = "logo", role = "", maskId = null, offsetX = 0, offsetY = 0, imgScale = 1, locked = false, x, y, scale, autoOffset = false, selectAfter = true }) {
-        if (!src) return null;
+    function createLayer({ team = null, player = null, src, name = null, kind = "logo", role = "", maskId = null, offsetX = 0, offsetY = 0, imgScale = 1, locked = false, x, y, scale, autoOffset = false, selectAfter = true, text = null }) {
+        const isText = kind === "text";
+        if (!isText && !src) return null;
+        
         const id = nextId++;
         const el = document.createElement("div");
         el.className = "layer";
@@ -646,13 +667,30 @@
 
         const clip = document.createElement("div");
         clip.className = "clip";
-        const img = document.createElement("img");
-        img.draggable = false;
-        img.alt = "";
-        clip.appendChild(img);
+        let img = null;
+        
+        if (isText) {
+            clip.style.display = "flex";
+            clip.style.alignItems = "center";
+            clip.style.justifyContent = "center";
+            clip.style.width = "100%";
+            clip.style.height = "100%";
+            clip.style.color = "#fff";
+            clip.style.fontSize = "48px";
+            clip.style.fontWeight = "bold";
+            clip.style.fontFamily = "Montserrat, sans-serif";
+            clip.style.textAlign = "center";
+            clip.style.wordBreak = "break-word";
+            clip.textContent = text;
+        } else {
+            img = document.createElement("img");
+            img.draggable = false;
+            img.alt = "";
+            clip.appendChild(img);
+        }
         el.appendChild(clip);
 
-        const displayName = name || team || player || (kind === "image" ? "Картинка" : "Логотип");
+        const displayName = name || team || player || (kind === "image" ? "Картинка" : (isText ? text : "Логотип"));
 
         const layer = {
             id, team, player, src, kind,
@@ -666,36 +704,56 @@
             y: (typeof y === "number" && isFinite(y)) ? y : BOARD_SIZE / 2,
             scale: (typeof scale === "number" && isFinite(scale) && scale > 0) ? scale : 1,
             baseW: 500, baseH: 500,
-            ready: false,
+            ready: true,
             el, clipEl: clip, imgEl: img,
             name: displayName,
+            text: text || "",
         };
+
+        if (isText) {
+            layer.baseW = 100;
+            layer.baseH = 100;
+            // Auto-size text
+            setTimeout(() => {
+                if (!layer.el) return;
+                const w = clip.scrollWidth || 100;
+                const h = clip.scrollHeight || 100;
+                layer.baseW = Math.ceil(w);
+                layer.baseH = Math.ceil(h);
+                applyLayerTransform(layer);
+                applyMaskToLayer(layer);
+                updateMaskParentStyles();
+                if (!IS_TEMPLATE) { refreshLayerItem(layer); renderLayersList(); }
+            }, 10);
+        }
 
         applyLayerTransform(layer);
 
-        img.onload = () => {
-            const nw = img.naturalWidth || 500;
-            const nh = img.naturalHeight || 500;
-            const ratio = Math.min(1, 500 / Math.max(nw, nh));
-            layer.baseW = Math.round(nw * ratio);
-            layer.baseH = Math.round(nh * ratio);
-            layer.ready = true;
+        if (img) {
+            img.onload = () => {
+                const nw = img.naturalWidth || 500;
+                const nh = img.naturalHeight || 500;
+                const ratio = Math.min(1, 500 / Math.max(nw, nh));
+                layer.baseW = Math.round(nw * ratio);
+                layer.baseH = Math.round(nh * ratio);
+                layer.ready = true;
 
-            if (autoOffset && layers.length > 1) {
-                const off = 30 * (layers.length - 1);
-                layer.x += off;
-                layer.y += off;
-            }
-            applyLayerTransform(layer);
-            applyMaskToLayer(layer);
-            updateMaskParentStyles();
-            if (!IS_TEMPLATE) { refreshLayerItem(layer); renderLayersList(); }
-        };
-        img.onerror = () => {
-            if (IS_TEMPLATE) console.warn("Не удалось загрузить:", layer.src);
-            else setStatus("Не удалось загрузить картинку по ссылке", "error");
-        };
-        img.src = src;
+                if (autoOffset && layers.length > 1) {
+                    const off = 30 * (layers.length - 1);
+                    layer.x += off;
+                    layer.y += off;
+                }
+                applyLayerTransform(layer);
+                applyMaskToLayer(layer);
+                updateMaskParentStyles();
+                if (!IS_TEMPLATE) { refreshLayerItem(layer); renderLayersList(); }
+            };
+            img.onerror = () => {
+                if (IS_TEMPLATE) console.warn("Не удалось загрузить:", layer.src);
+                else setStatus("Не удалось загрузить картинку по ссылке", "error");
+            };
+            img.src = src;
+        }
 
         $board.appendChild(el);
         layers.push(layer);
@@ -729,7 +787,7 @@
     }
 
     function setLayerSrc(layer, newSrc, { newTeam = undefined, newPlayer = undefined } = {}) {
-        if (!layer) return;
+        if (!layer || !layer.imgEl) return;
         if (newTeam !== undefined) layer.team = newTeam;
         if (newPlayer !== undefined) layer.player = newPlayer;
         layer.imgEl.onload = () => {
@@ -749,20 +807,32 @@
     function applyMaskToLayer(layer) {
         if (!layer || !layer.clipEl) return;
         const clip = layer.clipEl;
-        clip.style.position = "";
-        clip.style.left = "";
-        clip.style.top = "";
-        clip.style.width = "";
-        clip.style.height = "";
-        clip.style.overflow = "";
-        layer.imgEl.style.position = "";
-        layer.imgEl.style.left = "";
-        layer.imgEl.style.top = "";
-        layer.imgEl.style.width = "";
-        layer.imgEl.style.height = "";
-        layer.imgEl.style.objectFit = "";
-        layer.imgEl.style.transform = "";
-        layer.imgEl.style.transformOrigin = "";
+        
+        if (layer.kind === "text") {
+             clip.style.position = "";
+             clip.style.left = "";
+             clip.style.top = "";
+             clip.style.width = "100%";
+             clip.style.height = "100%";
+             clip.style.overflow = "";
+        } else {
+            clip.style.position = "";
+            clip.style.left = "";
+            clip.style.top = "";
+            clip.style.width = "";
+            clip.style.height = "";
+            clip.style.overflow = "";
+            if (layer.imgEl) {
+                layer.imgEl.style.position = "";
+                layer.imgEl.style.left = "";
+                layer.imgEl.style.top = "";
+                layer.imgEl.style.width = "";
+                layer.imgEl.style.height = "";
+                layer.imgEl.style.objectFit = "";
+                layer.imgEl.style.transform = "";
+                layer.imgEl.style.transformOrigin = "";
+            }
+        }
 
         if (!layer.maskId) return;
         const mask = getLayer(layer.maskId);
@@ -785,14 +855,19 @@
         clip.style.height = mh + "px";
         clip.style.overflow = "hidden";
 
-        layer.imgEl.style.position = "absolute";
-        layer.imgEl.style.left = "0";
-        layer.imgEl.style.top = "0";
-        layer.imgEl.style.width = "100%";
-        layer.imgEl.style.height = "100%";
-        layer.imgEl.style.objectFit = "cover";
-        layer.imgEl.style.transformOrigin = "center center";
-        layer.imgEl.style.transform = `translate(${layer.offsetX}px, ${layer.offsetY}px) scale(${layer.imgScale || 1})`;
+        if (layer.kind !== "text" && layer.imgEl) {
+            layer.imgEl.style.position = "absolute";
+            layer.imgEl.style.left = "0";
+            layer.imgEl.style.top = "0";
+            layer.imgEl.style.width = "100%";
+            layer.imgEl.style.height = "100%";
+            layer.imgEl.style.objectFit = "cover";
+            layer.imgEl.style.transformOrigin = "center center";
+            layer.imgEl.style.transform = `translate(${layer.offsetX}px, ${layer.offsetY}px) scale(${layer.imgScale || 1})`;
+        } else if (layer.kind === "text") {
+             // For text, we can keep it centered, but mask clipping might distort it if scaled. 
+             // We'll just let it clip.
+        }
     }
 
     function syncChildrenOfMask(maskId) {
@@ -816,7 +891,7 @@
                 if (l.id === excludeId) return;
                 const opt = document.createElement("option");
                 opt.value = String(l.id);
-                opt.textContent = (l.kind === "image" ? "🖼 " : "🏷 ") + (l.name || `слой #${l.id}`) + (l.locked ? " 🔒" : "");
+                opt.textContent = (l.kind === "image" ? "🖼 " : (l.kind === "text" ? "🔤 " : "🏷 ")) + (l.name || `слой #${l.id}`) + (l.locked ? " 🔒" : "");
                 sel.appendChild(opt);
             });
             const exists = [...sel.options].some(o => o.value === prev);
@@ -953,7 +1028,7 @@
         if (selectedIds.length > 1) { $selTitle.textContent = `Выделено слоёв: ${selectedIds.length}`; return; }
         const layer = getPrimary();
         if (!layer) { $selTitle.textContent = "Настройки слоя"; return; }
-        const kindLabel = layer.kind === "image" ? "картинка" : "логотип";
+        const kindLabel = layer.kind === "image" ? "картинка" : (layer.kind === "text" ? "текст" : "логотип");
         $selTitle.textContent = `Настройки слоя: ${layer.name || kindLabel}${layer.locked ? " 🔒" : ""}`;
     }
 
@@ -997,6 +1072,15 @@
          $imgScale, $imgScaleNum, $imgScaleDec, $imgScaleInc].forEach($el => {
             if ($el) $el.disabled = !hasOffset;
         });
+        
+        // Player text control
+        if (hasOne && cur && cur.role === "player-photo") {
+            $playerTextControl.classList.remove("hidden");
+            const textLayer = layers.find(l => l.kind === "text" && l.player === cur.player);
+            $playerShowText.checked = !!textLayer;
+        } else {
+            $playerTextControl.classList.add("hidden");
+        }
 
         if (!hasAny) {
             if ($layerName) $layerName.value = "";
@@ -1069,15 +1153,20 @@
 
             const thumb = document.createElement("div");
             thumb.className = "layer-thumb";
-            const timg = document.createElement("img");
-            timg.src = layer.src; timg.alt = "";
-            thumb.appendChild(timg);
+            if (layer.kind === "text") {
+                thumb.classList.add("text-thumb");
+                thumb.textContent = "🔤";
+            } else {
+                const timg = document.createElement("img");
+                timg.src = layer.src; timg.alt = "";
+                thumb.appendChild(timg);
+            }
 
             const meta = document.createElement("div");
             meta.className = "layer-meta";
             const name = document.createElement("div");
             name.className = "layer-name";
-            name.textContent = (layer.kind === "image" ? "🖼 " : "🏷 ") + (layer.name || "слой");
+            name.textContent = (layer.kind === "image" ? "🖼 " : (layer.kind === "text" ? "🔤 " : "🏷 ")) + (layer.name || "слой");
             name.title = "Двойной клик для переименования";
             const coords = document.createElement("div");
             coords.className = "layer-coords";
@@ -1090,6 +1179,7 @@
             if (layer.role) {
                 const roleEl = document.createElement("div");
                 roleEl.className = "layer-role";
+                if (layer.role === "player-name") roleEl.classList.add("text-role");
                 roleEl.textContent = ROLE_LABELS[layer.role] || layer.role;
                 meta.appendChild(roleEl);
             }
@@ -1166,7 +1256,7 @@
             done = true;
             if (save) {
                 const v = input.value.trim();
-                renameLayer(layer.id, v || (layer.kind === "image" ? "Картинка" : "Логотип"));
+                renameLayer(layer.id, v || (layer.kind === "image" ? "Картинка" : (layer.kind === "text" ? "Текст" : "Логотип")));
             } else renderLayersList();
         }
         input.addEventListener("keydown", e => {
@@ -1204,6 +1294,49 @@
         }
     }
 
+    // Attach text layer to player photo
+    function attachPlayerText(photoLayer, nick) {
+        if (!photoLayer || !nick) return;
+        let textLayer = layers.find(l => l.kind === "text" && l.player === nick);
+        if (textLayer) return textLayer;
+
+        textLayer = createLayer({
+            kind: "text",
+            text: nick,
+            name: `Ник: ${nick}`,
+            role: "player-name",
+            player: nick,
+            locked: photoLayer.locked,
+            x: photoLayer.x,
+            y: photoLayer.y + (photoLayer.baseH * photoLayer.scale) / 2 + 30, // Offset below
+            scale: photoLayer.scale,
+            selectAfter: false,
+        });
+        
+        return textLayer;
+    }
+
+    function detachPlayerText(photoLayer, nick) {
+        if (!nick) return;
+        const textLayers = layers.filter(l => l.kind === "text" && l.player === nick);
+        textLayers.forEach(l => removeLayer(l.id));
+    }
+
+    function syncPlayerTextPositions(photoLayer) {
+        if (photoLayer.kind !== "photo" && !photoLayer.src) return;
+        const nick = photoLayer.player;
+        if (!nick) return;
+        const textLayer = layers.find(l => l.kind === "text" && l.player === nick);
+        if (textLayer) {
+            // Keep text below photo
+            textLayer.x = photoLayer.x;
+            textLayer.y = photoLayer.y + (photoLayer.baseH * photoLayer.scale) / 2 + (textLayer.baseH * textLayer.scale) / 2 + 10;
+            textLayer.scale = photoLayer.scale;
+            applyLayerTransform(textLayer);
+            syncChildrenOfMask(textLayer.id);
+        }
+    }
+
     async function lookupTeam(name, addAsLayer, maskId = null) {
         const raw = name.trim();
         if (!raw) { setStatus("Ожидание названия команды…", "info"); return; }
@@ -1222,7 +1355,7 @@
         }
     }
 
-    async function lookupPlayer(nick, addAsLayer, maskId = null) {
+    async function lookupPlayer(nick, addAsLayer, maskId = null, showText = true) {
         const raw = nick.trim();
         if (!raw) { setPlayerStatus("Ожидание ника игрока…", "info"); return; }
         const token = ++playerLookupToken;
@@ -1233,7 +1366,12 @@
             if (!p) { setPlayerStatus(`Игрок "${raw}" не найден в PLAYERS`, "error"); return; }
             if (!p.photo) { setPlayerStatus(`У игрока "${p.nick}" не указано фото (колонка B)`, "error"); return; }
             setPlayerStatus(`Фото: ${p.nick}`, "ok");
-            if (addAsLayer) createLayer({ player: p.nick, src: p.photo, kind: "logo", role: "player-photo", maskId: maskId || null, autoOffset: true });
+            if (addAsLayer) {
+                const photoLayer = createLayer({ player: p.nick, src: p.photo, kind: "logo", role: "player-photo", maskId: maskId || null, autoOffset: true });
+                if (showText && photoLayer) {
+                    attachPlayerText(photoLayer, p.nick);
+                }
+            }
         } catch (e) {
             if (token !== playerLookupToken) return;
             setPlayerStatus("Ошибка: " + (e && e.message ? e.message : e), "error");
@@ -1259,6 +1397,7 @@
                 locked: orig.locked,
                 x: orig.x, y: orig.y, scale: orig.scale,
                 autoOffset: false, selectAfter: false,
+                text: orig.text,
             });
             if (copy) {
                 copy._origMaskId = orig.maskId || null;
@@ -1314,16 +1453,14 @@
         multiSnapshot = null;
     }
 
-    // В снапшот попадают только объекты, которые реально можно двигать.
-    // Если слой имеет маску, двигаем маску; если маска заблокирована — слой пропускается.
     function takeMultiSnapshot() {
         multiSnapshot = new Map();
         getSelectedLayers().forEach(l => {
             if (l.locked) return;
             if (l.maskId) {
                 const mask = getLayer(l.maskId);
-                if (!mask || mask.locked) return; // заблокированная маска не двигается — слой тоже
-                if (selectedIds.includes(mask.id)) return; // маска сама в выделении — учтётся отдельным проходом
+                if (!mask || mask.locked) return;
+                if (selectedIds.includes(mask.id)) return;
                 if (!multiSnapshot.has("mask:" + mask.id)) {
                     multiSnapshot.set("mask:" + mask.id, { id: mask.id, x: mask.x, y: mask.y, scale: mask.scale });
                 }
@@ -1343,6 +1480,7 @@
             l.x = s.x + dx;
             applyLayerTransform(l);
             syncChildrenOfMask(l.id);
+            if (l.kind !== "text") syncPlayerTextPositions(l);
             refreshLayerItem(l);
         });
         getSelectedLayers().forEach(l => { if (l.maskId && !isLayerMovementBlocked(l)) applyMaskToLayer(l); });
@@ -1357,6 +1495,7 @@
             l.y = s.y + dy;
             applyLayerTransform(l);
             syncChildrenOfMask(l.id);
+            if (l.kind !== "text") syncPlayerTextPositions(l);
             refreshLayerItem(l);
         });
         getSelectedLayers().forEach(l => { if (l.maskId && !isLayerMovementBlocked(l)) applyMaskToLayer(l); });
@@ -1373,6 +1512,7 @@
             applyLayerTransform(l);
             applyMaskToLayer(l);
             syncChildrenOfMask(l.id);
+            if (l.kind !== "text") syncPlayerTextPositions(l);
             refreshLayerItem(l);
         });
         getSelectedLayers().forEach(l => { if (l.maskId && !isLayerMovementBlocked(l)) applyMaskToLayer(l); });
@@ -1391,10 +1531,10 @@
 
         $playerName.addEventListener("input", () => {
             clearTimeout(playerDebounceTimer);
-            playerDebounceTimer = setTimeout(() => lookupPlayer($playerName.value, true, $playerMask.value ? Number($playerMask.value) : null), 350);
+            playerDebounceTimer = setTimeout(() => lookupPlayer($playerName.value, true, $playerMask.value ? Number($playerMask.value) : null, $playerAddTextCheckbox.checked), 350);
         });
         $playerName.addEventListener("keydown", e => {
-            if (e.key === "Enter") { clearTimeout(playerDebounceTimer); lookupPlayer($playerName.value, true, $playerMask.value ? Number($playerMask.value) : null); }
+            if (e.key === "Enter") { clearTimeout(playerDebounceTimer); lookupPlayer($playerName.value, true, $playerMask.value ? Number($playerMask.value) : null, $playerAddTextCheckbox.checked); }
         });
 
         $dupBtn.addEventListener("click", duplicateSelected);
@@ -1442,7 +1582,7 @@
                 if (item) {
                     const nameEl = item.querySelector(".layer-name");
                     if (nameEl && !nameEl.querySelector("input")) {
-                        nameEl.textContent = (layer.kind === "image" ? "🖼 " : "🏷 ") + layer.name;
+                        nameEl.textContent = (layer.kind === "image" ? "🖼 " : (layer.kind === "text" ? "🔤 " : "🏷 ")) + layer.name;
                     }
                 }
             }
@@ -1451,7 +1591,7 @@
             const layer = getPrimary();
             if (!layer) return;
             const v = $layerName.value.trim();
-            const fallback = layer.kind === "image" ? "Картинка" : "Логотип";
+            const fallback = layer.kind === "image" ? "Картинка" : (layer.kind === "text" ? "Текст" : "Логотип");
             layer.name = v || fallback;
             $layerName.value = layer.name;
             updateSelectedTitle();
@@ -1465,6 +1605,16 @@
             layer.role = $layerRole.value || "";
             renderLayersList();
             setStatus(`Роль слоя: ${ROLE_LABELS[layer.role] || "—"}`, "info");
+        });
+
+        $playerShowText.addEventListener("change", () => {
+            const layer = getPrimary();
+            if (!layer || layer.role !== "player-photo" || !layer.player) return;
+            if ($playerShowText.checked) {
+                attachPlayerText(layer, layer.player);
+            } else {
+                detachPlayerText(layer, layer.player);
+            }
         });
 
         $layerMask.addEventListener("change", () => {
@@ -1487,6 +1637,7 @@
             layer.maskId = newId;
             if (newId) { layer.offsetX = 0; layer.offsetY = 0; layer.imgScale = 1; }
             applyMaskToLayer(layer);
+            if (layer.kind !== "text") syncPlayerTextPositions(layer);
             renderLayersList();
             updateOffsetCard();
             syncControlsWithSelected();
@@ -1512,6 +1663,7 @@
             } else {
                 l.x = v; applyLayerTransform(l); syncChildrenOfMask(l.id);
             }
+            if (l.kind !== "text") syncPlayerTextPositions(l);
             if ($posX) $posX.value = v;
             if ($posXNum) $posXNum.value = Math.round(v);
             refreshLayerItem(l);
@@ -1534,6 +1686,7 @@
             } else {
                 l.y = v; applyLayerTransform(l); syncChildrenOfMask(l.id);
             }
+            if (l.kind !== "text") syncPlayerTextPositions(l);
             if ($posY) $posY.value = v;
             if ($posYNum) $posYNum.value = Math.round(v);
             refreshLayerItem(l);
@@ -1556,6 +1709,7 @@
             } else {
                 l.scale = v; applyLayerTransform(l); applyMaskToLayer(l); syncChildrenOfMask(l.id);
             }
+            if (l.kind !== "text") syncPlayerTextPositions(l);
             if ($scale) $scale.value = v.toFixed(2);
             if ($scaleNum) $scaleNum.value = v.toFixed(2);
             refreshLayerItem(l);
@@ -1735,6 +1889,7 @@
                 l.x = BOARD_SIZE / 2; l.y = BOARD_SIZE / 2;
                 applyLayerTransform(l); syncChildrenOfMask(l.id);
             }
+            if (l.kind !== "text") syncPlayerTextPositions(l);
             syncControlsWithSelected();
             refreshLayerItem(l);
         });
@@ -1753,7 +1908,7 @@
                         applyLayerTransform(l);
                     }
                 });
-                sel.forEach(l => { applyMaskToLayer(l); syncChildrenOfMask(l.id); });
+                sel.forEach(l => { applyMaskToLayer(l); syncChildrenOfMask(l.id); if (l.kind !== "text") syncPlayerTextPositions(l); });
                 multiSnapshot = null;
                 syncControlsWithSelected();
                 sel.forEach(l => refreshLayerItem(l));
@@ -1763,6 +1918,7 @@
             if (!l || isLayerMovementBlocked(l)) return;
             if (l.maskId) { l.offsetX = 0; l.offsetY = 0; l.imgScale = 1; applyMaskToLayer(l); }
             else { l.scale = 1; applyLayerTransform(l); applyMaskToLayer(l); syncChildrenOfMask(l.id); }
+            if (l.kind !== "text") syncPlayerTextPositions(l);
             syncControlsWithSelected();
             refreshLayerItem(l);
         });
@@ -1894,7 +2050,6 @@
             else if (e.ctrlKey || e.metaKey) { toggleInSelection(hit.id); return; }
             else setSelection([hit.id], hit.id);
 
-            // Если движение заблокировано (сам слой или его маска) — не начинаем drag
             if (isLayerMovementBlocked(hit)) return;
 
             $board.setPointerCapture(e.pointerId);
@@ -1925,7 +2080,7 @@
                     if (selectedIds.includes(l.maskId)) return;
                     if (byMaskId.has(l.maskId)) return;
                     const mask = getLayer(l.maskId);
-                    if (!mask || mask.locked) return; // заблокированную маску не двигаем
+                    if (!mask || mask.locked) return;
                     byMaskId.add(l.maskId);
                     targets.push({ obj: mask, isMask: true });
                 } else {
@@ -2021,7 +2176,10 @@
                 o.x = st.startX + dx;
                 o.y = st.startY + dy;
                 applyLayerTransform(o);
-                if (o.id) syncChildrenOfMask(o.id);
+                if (o.id) {
+                    syncChildrenOfMask(o.id);
+                    if (o.kind !== "text") syncPlayerTextPositions(o);
+                }
             });
 
             syncControlsWithSelected();
@@ -2039,10 +2197,12 @@
             const zoomInside = e.altKey || e.shiftKey;
 
             if (hit.maskId && zoomInside) {
-                layer.imgScale = clamp((layer.imgScale || 1) * factor, 0.2, 5);
-                applyMaskToLayer(layer);
-                if ($imgScale) $imgScale.value = layer.imgScale.toFixed(2);
-                if ($imgScaleNum) $imgScaleNum.value = layer.imgScale.toFixed(2);
+                if (layer.kind !== "text" && layer.imgEl) {
+                    layer.imgScale = clamp((layer.imgScale || 1) * factor, 0.2, 5);
+                    applyMaskToLayer(layer);
+                    if ($imgScale) $imgScale.value = layer.imgScale.toFixed(2);
+                    if ($imgScaleNum) $imgScaleNum.value = layer.imgScale.toFixed(2);
+                }
                 refreshLayerItem(layer);
                 return;
             }
@@ -2068,6 +2228,7 @@
                 applyLayerTransform(hit);
                 syncChildrenOfMask(hit.id);
             }
+            if (hit.kind !== "text") syncPlayerTextPositions(hit);
             syncControlsWithSelected();
             refreshLayerItem(layer);
         }, { passive: false });
@@ -2086,6 +2247,7 @@
             x: Math.round(l.x * 100) / 100,
             y: Math.round(l.y * 100) / 100,
             scale: Math.round(l.scale * 1000) / 1000,
+            text: l.text || "",
         }));
     }
 
@@ -2161,10 +2323,12 @@
 
             const created = [];
             arr.forEach(item => {
-                if (!item || !item.src) return;
+                if (!item) return;
+                const isText = item.kind === "text";
+                if (!isText && !item.src) return;
                 const l = createLayer({
-                    src: String(item.src),
-                    kind: item.kind === "image" ? "image" : "logo",
+                    src: String(item.src || ""),
+                    kind: isText ? "text" : (item.kind === "image" ? "image" : "logo"),
                     role: String(item.role || ""),
                     name: String(item.name || "").trim() || null,
                     team: String(item.team || "").trim() || null,
@@ -2175,6 +2339,7 @@
                     locked: !!item.locked,
                     x: Number(item.x), y: Number(item.y), scale: Number(item.scale),
                     autoOffset: false, selectAfter: false,
+                    text: String(item.text || ""),
                 });
                 if (l) created.push({ srcItem: item, layer: l });
             });
@@ -2291,8 +2456,20 @@
                 const p = players.get(raw.toLowerCase());
                 if (!p) { fb.className = "fb error"; fb.textContent = `Игрок "${raw}" не найден`; return; }
                 if (!p.photo) { fb.className = "fb error"; fb.textContent = `У игрока "${p.nick}" нет фото`; return; }
+                
+                const oldNick = layer.player;
                 setLayerSrc(layer, p.photo, { newPlayer: p.nick });
                 fb.className = "fb ok"; fb.textContent = `Установлено: ${p.nick}`;
+                
+                // Update text layer if exists
+                const textLayer = layers.find(l => l.kind === "text" && l.player === oldNick);
+                if (textLayer) {
+                    textLayer.player = p.nick;
+                    textLayer.text = p.nick;
+                    textLayer.clipEl.textContent = p.nick;
+                    textLayer.name = `Ник: ${p.nick}`;
+                    renderLayersList();
+                }
             } catch (e) {
                 if (myToken !== token) return;
                 fb.className = "fb error"; fb.textContent = "Ошибка: " + (e && e.message ? e.message : e);
@@ -2341,15 +2518,18 @@
         const arr = Array.isArray(TEMPLATE_DATA) ? TEMPLATE_DATA : (TEMPLATE_DATA?.layers || []);
         const created = [];
         arr.forEach(item => {
-            if (!item || !item.src) return;
+            if (!item) return;
+            const isText = item.kind === "text";
+            if (!isText && !item.src) return;
             const l = createLayer({
-                src: item.src, kind: item.kind, role: item.role, name: item.name,
+                src: item.src || "", kind: item.kind, role: item.role, name: item.name,
                 team: item.team, player: item.player,
                 offsetX: Number(item.offsetX) || 0, offsetY: Number(item.offsetY) || 0,
                 imgScale: Number(item.imgScale) || 1,
                 locked: !!item.locked,
                 x: Number(item.x), y: Number(item.y), scale: Number(item.scale),
                 autoOffset: false, selectAfter: false,
+                text: String(item.text || ""),
             });
             if (l) created.push({ srcItem: item, layer: l });
         });
