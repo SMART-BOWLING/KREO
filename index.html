@@ -655,7 +655,7 @@
     }
 
     // -------- Создание слоя --------
-    function createLayer({ team = null, player = null, src, name = null, kind = "logo", role = "", maskId = null, offsetX = 0, offsetY = 0, imgScale = 1, locked = false, x, y, scale, autoOffset = false, selectAfter = true, text = null }) {
+    function createLayer({ team = null, player = null, src, name = null, kind = "logo", role = "", maskId = null, offsetX = 0, offsetY = 0, imgScale = 1, locked = false, x, y, scale, autoOffset = false, selectAfter = true, text = null, baseW = null, baseH = null }) {
         const isText = kind === "text";
         if (!isText && !src) return null;
         
@@ -692,6 +692,10 @@
 
         const displayName = name || team || player || (kind === "image" ? "Картинка" : (isText ? text : "Логотип"));
 
+        // Восстанавливаем сохраненные размеры, чтобы маски не сбивались
+        const initialW = (typeof baseW === "number" && baseW > 0) ? baseW : 500;
+        const initialH = (typeof baseH === "number" && baseH > 0) ? baseH : 500;
+
         const layer = {
             id, team, player, src, kind,
             role: role || "",
@@ -703,16 +707,14 @@
             x: (typeof x === "number" && isFinite(x)) ? x : BOARD_SIZE / 2,
             y: (typeof y === "number" && isFinite(y)) ? y : BOARD_SIZE / 2,
             scale: (typeof scale === "number" && isFinite(scale) && scale > 0) ? scale : 1,
-            baseW: 500, baseH: 500,
+            baseW: initialW, baseH: initialH,
             ready: true,
             el, clipEl: clip, imgEl: img,
             name: displayName,
             text: text || "",
         };
 
-        if (isText) {
-            layer.baseW = 100;
-            layer.baseH = 100;
+        if (isText && !baseW) {
             setTimeout(() => {
                 if (!layer.el) return;
                 const w = clip.scrollWidth || 100;
@@ -733,8 +735,15 @@
                 const nw = img.naturalWidth || 500;
                 const nh = img.naturalHeight || 500;
                 const ratio = Math.min(1, 500 / Math.max(nw, nh));
-                layer.baseW = Math.round(nw * ratio);
-                layer.baseH = Math.round(nh * ratio);
+                const calcW = Math.round(nw * ratio);
+                const calcH = Math.round(nh * ratio);
+
+                // Если это не шаблон, обновляем размеры (или если у нас не было сохраненных)
+                if (!IS_TEMPLATE || !baseW) {
+                    layer.baseW = calcW;
+                    layer.baseH = calcH;
+                }
+                
                 layer.ready = true;
 
                 if (autoOffset && layers.length > 1) {
@@ -1069,13 +1078,11 @@
             if ($el) $el.disabled = !hasOffset;
         });
         
-        // Player text control: show if the selected layer has a player name (or if it's a photo and there's a player associated)
         if (hasOne && cur && (cur.role === "player-photo" || (cur.player && cur.kind !== "text"))) {
             $playerTextControl.classList.remove("hidden");
             let textLayer = layers.find(l => l.kind === "text" && l.player === cur.player);
             $playerShowText.checked = !!textLayer;
         } else if (hasOne && cur && cur.kind === "text") {
-            // If a text layer is selected, we can still show it but maybe disable or allow deletion? Let's keep it hidden.
             $playerTextControl.classList.add("hidden");
         } else {
             $playerTextControl.classList.add("hidden");
@@ -1394,6 +1401,7 @@
                 x: orig.x, y: orig.y, scale: orig.scale,
                 autoOffset: false, selectAfter: false,
                 text: orig.text,
+                baseW: orig.baseW, baseH: orig.baseH
             });
             if (copy) {
                 copy._origMaskId = orig.maskId || null;
@@ -1603,7 +1611,7 @@
         $playerShowText.addEventListener("change", () => {
             const layer = getPrimary();
             if (!layer) return;
-            if (layer.kind === "text") return; // don't toggle for text layer itself
+            if (layer.kind === "text") return;
             if (!layer.player) {
                 setStatus("У слоя нет игрока. Добавьте игрока или укажите player.", "error");
                 $playerShowText.checked = false;
@@ -2245,6 +2253,8 @@
             y: Math.round(l.y * 100) / 100,
             scale: Math.round(l.scale * 1000) / 1000,
             text: l.text || "",
+            baseW: Math.round(l.baseW * 100) / 100,
+            baseH: Math.round(l.baseH * 100) / 100,
         }));
     }
 
@@ -2337,6 +2347,8 @@
                     x: Number(item.x), y: Number(item.y), scale: Number(item.scale),
                     autoOffset: false, selectAfter: false,
                     text: String(item.text || ""),
+                    baseW: Number(item.baseW) || null,
+                    baseH: Number(item.baseH) || null,
                 });
                 if (l) created.push({ srcItem: item, layer: l });
             });
@@ -2524,6 +2536,8 @@
                 x: Number(item.x), y: Number(item.y), scale: Number(item.scale),
                 autoOffset: false, selectAfter: false,
                 text: String(item.text || ""),
+                baseW: Number(item.baseW) || null,
+                baseH: Number(item.baseH) || null,
             });
             if (l) created.push({ srcItem: item, layer: l });
         });
