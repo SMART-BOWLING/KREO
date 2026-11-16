@@ -54,7 +54,6 @@
     .layer.selected-primary { outline-color: rgba(154, 92, 248, 1); outline-width: 3px; }
     .layer.mask-parent { outline: 2px dashed rgba(255, 165, 0, .8); }
     .layer.locked { cursor: not-allowed; }
-    .layer.locked img { opacity: .85; }
     .layer img {
         display: block; width: 100%; height: 100%;
         pointer-events: none; user-select: none;
@@ -408,7 +407,7 @@
         <div class="hint">
             Клик — выделить один. Ctrl/Cmd+клик — добавить/убрать из выделения.
             Shift+клик — выделить диапазон. При мультивыборе ползунки X/Y/Масштаб — это сдвиг для всех.
-            Кнопка 🔒 блокирует слой от случайного перемещения.
+            Кнопка 🔒 блокирует слой от случайного перемещения; если маска заблокирована — зависимый слой тоже не двигается.
         </div>
         <div class="layers-list" id="layersList">
             <div class="empty-layers" id="emptyLayers">Пока нет слоёв</div>
@@ -566,9 +565,8 @@
     let playerDebounceTimer = null;
     let lastClickedIndex = -1;
 
-    // Для мультирежима ползунков: точка «0» и снапшоты
     let multiBaseX = 0, multiBaseY = 0, multiBaseScale = 1;
-    let multiSnapshot = null; // Map id -> {x,y,scale}
+    let multiSnapshot = null;
 
     function setStatus(msg, type = "info") { if (!$status) return; $status.textContent = msg; $status.className = "status " + type; }
     function setImageStatus(msg, type = "info") { if (!$imageStatus) return; $imageStatus.textContent = msg; $imageStatus.className = "status " + type; }
@@ -622,6 +620,20 @@
     function getLayer(id) { return layers.find(l => l.id === id) || null; }
     function getPrimary() { return getLayer(primaryId); }
     function getSelectedLayers() { return selectedIds.map(id => getLayer(id)).filter(Boolean); }
+
+    // Слой заблокирован «по-настоящему», если он сам locked
+    function isLayerLocked(l) { return !!(l && l.locked); }
+
+    // Слой нельзя двигать, если он сам заблокирован или его маска заблокирована
+    function isLayerMovementBlocked(l) {
+        if (!l) return true;
+        if (l.locked) return true;
+        if (l.maskId) {
+            const mask = getLayer(l.maskId);
+            if (mask && mask.locked) return true;
+        }
+        return false;
+    }
 
     // -------- Создание слоя --------
     function createLayer({ team = null, player = null, src, name = null, kind = "logo", role = "", maskId = null, offsetX = 0, offsetY = 0, imgScale = 1, locked = false, x, y, scale, autoOffset = false, selectAfter = true }) {
@@ -804,7 +816,7 @@
                 if (l.id === excludeId) return;
                 const opt = document.createElement("option");
                 opt.value = String(l.id);
-                opt.textContent = (l.kind === "image" ? "🖼 " : "🏷 ") + (l.name || `слой #${l.id}`);
+                opt.textContent = (l.kind === "image" ? "🖼 " : "🏷 ") + (l.name || `слой #${l.id}`) + (l.locked ? " 🔒" : "");
                 sel.appendChild(opt);
             });
             const exists = [...sel.options].some(o => o.value === prev);
@@ -949,17 +961,18 @@
         const hasAny = selectedIds.length > 0;
         const hasOne = selectedIds.length === 1 && !!getPrimary();
         const multi = selectedIds.length > 1;
-        const locked = hasOne && getPrimary() && getPrimary().locked;
+        const cur = hasOne ? getPrimary() : null;
+        const movementBlocked = hasOne && isLayerMovementBlocked(cur);
 
         [$posX, $posY, $posXNum, $posYNum, $posXDec, $posXInc, $posYDec, $posYInc].forEach($el => {
-            if ($el) $el.disabled = !hasAny || locked;
+            if ($el) $el.disabled = !hasAny || movementBlocked;
         });
         [$scale, $scaleNum, $scaleDec, $scaleInc].forEach($el => {
-            if ($el) $el.disabled = !hasAny || locked;
+            if ($el) $el.disabled = !hasAny || movementBlocked;
         });
 
-        if ($centerBtn) $centerBtn.disabled = !hasAny || locked;
-        if ($resetBtn) $resetBtn.disabled = !hasAny || locked;
+        if ($centerBtn) $centerBtn.disabled = !hasAny || movementBlocked;
+        if ($resetBtn) $resetBtn.disabled = !hasAny || movementBlocked;
         if ($removeBtn) $removeBtn.disabled = !hasAny;
 
         if ($layerName) $layerName.disabled = !hasOne;
@@ -979,8 +992,7 @@
         if ($posYNum) $posYNum.classList.toggle("multi-hint", multi);
         if ($scaleNum) $scaleNum.classList.toggle("multi-hint", multi);
 
-        // Смещение и масштаб картинки — только когда есть маска и слой не заблокирован
-        const hasOffset = hasOne && getPrimary() && getPrimary().maskId && !locked;
+        const hasOffset = hasOne && cur && cur.maskId && !movementBlocked;
         [$offX, $offY, $offXNum, $offYNum, $offXDec, $offXInc, $offYDec, $offYInc,
          $imgScale, $imgScaleNum, $imgScaleDec, $imgScaleInc].forEach($el => {
             if ($el) $el.disabled = !hasOffset;
@@ -1085,7 +1097,7 @@
                 const maskEl = document.createElement("div");
                 maskEl.className = "layer-role mask-role";
                 const m = getLayer(layer.maskId);
-                maskEl.textContent = "маска: " + (m ? (m.name || `#${m.id}`) : "?");
+                maskEl.textContent = "маска: " + (m ? (m.name || `#${m.id}`) : "?") + (m && m.locked ? " 🔒" : "");
                 meta.appendChild(maskEl);
             }
             if (parents.has(layer.id)) {
@@ -1286,7 +1298,7 @@
 
     function applyImgScale(v) {
         const l = getPrimary();
-        if (!l || !l.maskId || l.locked) return;
+        if (!l || !l.maskId || isLayerMovementBlocked(l)) return;
         l.imgScale = clamp(v, 0.2, 5);
         applyMaskToLayer(l);
         if ($imgScale) $imgScale.value = l.imgScale.toFixed(2);
@@ -1302,21 +1314,20 @@
         multiSnapshot = null;
     }
 
+    // В снапшот попадают только объекты, которые реально можно двигать.
+    // Если слой имеет маску, двигаем маску; если маска заблокирована — слой пропускается.
     function takeMultiSnapshot() {
         multiSnapshot = new Map();
         getSelectedLayers().forEach(l => {
             if (l.locked) return;
             if (l.maskId) {
                 const mask = getLayer(l.maskId);
-                if (mask && !selectedIds.includes(mask.id)) {
-                    if (!multiSnapshot.has("mask:" + mask.id)) {
-                        multiSnapshot.set("mask:" + mask.id, { id: mask.id, x: mask.x, y: mask.y, scale: mask.scale });
-                    }
-                    return;
+                if (!mask || mask.locked) return; // заблокированная маска не двигается — слой тоже
+                if (selectedIds.includes(mask.id)) return; // маска сама в выделении — учтётся отдельным проходом
+                if (!multiSnapshot.has("mask:" + mask.id)) {
+                    multiSnapshot.set("mask:" + mask.id, { id: mask.id, x: mask.x, y: mask.y, scale: mask.scale });
                 }
-                if (mask && selectedIds.includes(mask.id)) {
-                    return;
-                }
+                return;
             }
             if (!multiSnapshot.has("layer:" + l.id)) {
                 multiSnapshot.set("layer:" + l.id, { id: l.id, x: l.x, y: l.y, scale: l.scale });
@@ -1334,7 +1345,7 @@
             syncChildrenOfMask(l.id);
             refreshLayerItem(l);
         });
-        getSelectedLayers().forEach(l => { if (l.maskId && !l.locked) applyMaskToLayer(l); });
+        getSelectedLayers().forEach(l => { if (l.maskId && !isLayerMovementBlocked(l)) applyMaskToLayer(l); });
         multiSnapshot.forEach(s => syncChildrenOfMask(s.id));
     }
 
@@ -1348,7 +1359,7 @@
             syncChildrenOfMask(l.id);
             refreshLayerItem(l);
         });
-        getSelectedLayers().forEach(l => { if (l.maskId && !l.locked) applyMaskToLayer(l); });
+        getSelectedLayers().forEach(l => { if (l.maskId && !isLayerMovementBlocked(l)) applyMaskToLayer(l); });
         multiSnapshot.forEach(s => syncChildrenOfMask(s.id));
     }
 
@@ -1364,7 +1375,7 @@
             syncChildrenOfMask(l.id);
             refreshLayerItem(l);
         });
-        getSelectedLayers().forEach(l => { if (l.maskId && !l.locked) applyMaskToLayer(l); });
+        getSelectedLayers().forEach(l => { if (l.maskId && !isLayerMovementBlocked(l)) applyMaskToLayer(l); });
         multiSnapshot.forEach(s => syncChildrenOfMask(s.id));
     }
 
@@ -1485,7 +1496,7 @@
 
         function applyXInput(rawValue) {
             const l0 = getPrimary();
-            if (!l0 || l0.locked) return;
+            if (!l0 || isLayerMovementBlocked(l0)) return;
             if (selectedIds.length > 1) {
                 const dx = rawValue;
                 applyDeltaX(dx);
@@ -1497,7 +1508,7 @@
             const v = clamp(rawValue, -1000, 2000);
             if (l.maskId) {
                 const mask = getLayer(l.maskId);
-                if (mask) { mask.x = v; applyLayerTransform(mask); applyMaskToLayer(l); syncChildrenOfMask(mask.id); }
+                if (mask && !mask.locked) { mask.x = v; applyLayerTransform(mask); applyMaskToLayer(l); syncChildrenOfMask(mask.id); }
             } else {
                 l.x = v; applyLayerTransform(l); syncChildrenOfMask(l.id);
             }
@@ -1507,7 +1518,7 @@
         }
         function applyYInput(rawValue) {
             const l0 = getPrimary();
-            if (!l0 || l0.locked) return;
+            if (!l0 || isLayerMovementBlocked(l0)) return;
             if (selectedIds.length > 1) {
                 const dy = rawValue;
                 applyDeltaY(dy);
@@ -1519,7 +1530,7 @@
             const v = clamp(rawValue, -1000, 2000);
             if (l.maskId) {
                 const mask = getLayer(l.maskId);
-                if (mask) { mask.y = v; applyLayerTransform(mask); applyMaskToLayer(l); syncChildrenOfMask(mask.id); }
+                if (mask && !mask.locked) { mask.y = v; applyLayerTransform(mask); applyMaskToLayer(l); syncChildrenOfMask(mask.id); }
             } else {
                 l.y = v; applyLayerTransform(l); syncChildrenOfMask(l.id);
             }
@@ -1529,7 +1540,7 @@
         }
         function applyScaleInput(rawValue) {
             const l0 = getPrimary();
-            if (!l0 || l0.locked) return;
+            if (!l0 || isLayerMovementBlocked(l0)) return;
             if (selectedIds.length > 1) {
                 const delta = rawValue;
                 applyDeltaScale(delta);
@@ -1541,7 +1552,7 @@
             const v = clamp(rawValue, 0.05, 3);
             if (l.maskId) {
                 const mask = getLayer(l.maskId);
-                if (mask) { mask.scale = v; applyLayerTransform(mask); applyMaskToLayer(l); syncChildrenOfMask(mask.id); }
+                if (mask && !mask.locked) { mask.scale = v; applyLayerTransform(mask); applyMaskToLayer(l); syncChildrenOfMask(mask.id); }
             } else {
                 l.scale = v; applyLayerTransform(l); applyMaskToLayer(l); syncChildrenOfMask(l.id);
             }
@@ -1551,7 +1562,7 @@
         }
         function applyOffsetX(v) {
             const l = getPrimary();
-            if (!l || !l.maskId || l.locked) return;
+            if (!l || !l.maskId || isLayerMovementBlocked(l)) return;
             l.offsetX = v;
             applyMaskToLayer(l);
             if ($offX) $offX.value = Math.round(v);
@@ -1560,7 +1571,7 @@
         }
         function applyOffsetY(v) {
             const l = getPrimary();
-            if (!l || !l.maskId || l.locked) return;
+            if (!l || !l.maskId || isLayerMovementBlocked(l)) return;
             l.offsetY = v;
             applyMaskToLayer(l);
             if ($offY) $offY.value = Math.round(v);
@@ -1658,40 +1669,40 @@
         $imgScale.addEventListener("input", () => applyImgScale(parseFloat($imgScale.value)));
         $imgScaleNum.addEventListener("input", () => { const v = parseFloat($imgScaleNum.value); if (!Number.isNaN(v)) applyImgScale(v); });
         $imgScaleNum.addEventListener("blur", () => syncControlsWithSelected());
-        $imgScaleDec.addEventListener("click", () => { const l = getPrimary(); if (!l || l.locked) return; applyImgScale((l.imgScale || 1) - 0.01); });
-        $imgScaleInc.addEventListener("click", () => { const l = getPrimary(); if (!l || l.locked) return; applyImgScale((l.imgScale || 1) + 0.01); });
+        $imgScaleDec.addEventListener("click", () => { const l = getPrimary(); if (!l || isLayerMovementBlocked(l)) return; applyImgScale((l.imgScale || 1) - 0.01); });
+        $imgScaleInc.addEventListener("click", () => { const l = getPrimary(); if (!l || isLayerMovementBlocked(l)) return; applyImgScale((l.imgScale || 1) + 0.01); });
 
         $posXDec.addEventListener("click", () => {
-            const l = getPrimary(); if (!l || l.locked) return;
+            const l = getPrimary(); if (!l || isLayerMovementBlocked(l)) return;
             applyXInput(Math.round(l.x) - 1);
         });
         $posXInc.addEventListener("click", () => {
-            const l = getPrimary(); if (!l || l.locked) return;
+            const l = getPrimary(); if (!l || isLayerMovementBlocked(l)) return;
             applyXInput(Math.round(l.x) + 1);
         });
         $posYDec.addEventListener("click", () => {
-            const l = getPrimary(); if (!l || l.locked) return;
+            const l = getPrimary(); if (!l || isLayerMovementBlocked(l)) return;
             applyYInput(Math.round(l.y) - 1);
         });
         $posYInc.addEventListener("click", () => {
-            const l = getPrimary(); if (!l || l.locked) return;
+            const l = getPrimary(); if (!l || isLayerMovementBlocked(l)) return;
             applyYInput(Math.round(l.y) + 1);
         });
         $scaleDec.addEventListener("click", () => {
-            const l = getPrimary(); if (!l || l.locked) return;
+            const l = getPrimary(); if (!l || isLayerMovementBlocked(l)) return;
             applyScaleInput(Math.round((l.scale - 0.01) * 100) / 100);
         });
         $scaleInc.addEventListener("click", () => {
-            const l = getPrimary(); if (!l || l.locked) return;
+            const l = getPrimary(); if (!l || isLayerMovementBlocked(l)) return;
             applyScaleInput(Math.round((l.scale + 0.01) * 100) / 100);
         });
-        $offXDec.addEventListener("click", () => { const l = getPrimary(); if (!l || l.locked) return; applyOffsetX(Math.round(l.offsetX) - 1); });
-        $offXInc.addEventListener("click", () => { const l = getPrimary(); if (!l || l.locked) return; applyOffsetX(Math.round(l.offsetX) + 1); });
-        $offYDec.addEventListener("click", () => { const l = getPrimary(); if (!l || l.locked) return; applyOffsetY(Math.round(l.offsetY) - 1); });
-        $offYInc.addEventListener("click", () => { const l = getPrimary(); if (!l || l.locked) return; applyOffsetY(Math.round(l.offsetY) + 1); });
+        $offXDec.addEventListener("click", () => { const l = getPrimary(); if (!l || isLayerMovementBlocked(l)) return; applyOffsetX(Math.round(l.offsetX) - 1); });
+        $offXInc.addEventListener("click", () => { const l = getPrimary(); if (!l || isLayerMovementBlocked(l)) return; applyOffsetX(Math.round(l.offsetX) + 1); });
+        $offYDec.addEventListener("click", () => { const l = getPrimary(); if (!l || isLayerMovementBlocked(l)) return; applyOffsetY(Math.round(l.offsetY) - 1); });
+        $offYInc.addEventListener("click", () => { const l = getPrimary(); if (!l || isLayerMovementBlocked(l)) return; applyOffsetY(Math.round(l.offsetY) + 1); });
 
         $centerBtn.addEventListener("click", () => {
-            const sel = getSelectedLayers().filter(l => !l.locked);
+            const sel = getSelectedLayers().filter(l => !isLayerMovementBlocked(l));
             if (!sel.length) return;
             if (sel.length > 1) {
                 let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -1716,10 +1727,10 @@
                 return;
             }
             const l = getPrimary();
-            if (!l || l.locked) return;
+            if (!l || isLayerMovementBlocked(l)) return;
             if (l.maskId) {
                 const mask = getLayer(l.maskId);
-                if (mask) { mask.x = BOARD_SIZE / 2; mask.y = BOARD_SIZE / 2; applyLayerTransform(mask); applyMaskToLayer(l); syncChildrenOfMask(mask.id); }
+                if (mask && !mask.locked) { mask.x = BOARD_SIZE / 2; mask.y = BOARD_SIZE / 2; applyLayerTransform(mask); applyMaskToLayer(l); syncChildrenOfMask(mask.id); }
             } else {
                 l.x = BOARD_SIZE / 2; l.y = BOARD_SIZE / 2;
                 applyLayerTransform(l); syncChildrenOfMask(l.id);
@@ -1728,7 +1739,7 @@
             refreshLayerItem(l);
         });
         $resetBtn.addEventListener("click", () => {
-            const sel = getSelectedLayers().filter(l => !l.locked);
+            const sel = getSelectedLayers().filter(l => !isLayerMovementBlocked(l));
             if (!sel.length) return;
             if (selectedIds.length > 1) {
                 multiSnapshot = null;
@@ -1736,7 +1747,7 @@
                 sel.forEach(l => {
                     if (l.maskId) {
                         const mask = getLayer(l.maskId);
-                        if (mask && !selectedIds.includes(mask.id)) { mask.scale = 1; applyLayerTransform(mask); }
+                        if (mask && !mask.locked && !selectedIds.includes(mask.id)) { mask.scale = 1; applyLayerTransform(mask); }
                     } else {
                         l.scale = 1;
                         applyLayerTransform(l);
@@ -1749,7 +1760,7 @@
                 return;
             }
             const l = getPrimary();
-            if (!l || l.locked) return;
+            if (!l || isLayerMovementBlocked(l)) return;
             if (l.maskId) { l.offsetX = 0; l.offsetY = 0; l.imgScale = 1; applyMaskToLayer(l); }
             else { l.scale = 1; applyLayerTransform(l); applyMaskToLayer(l); syncChildrenOfMask(l.id); }
             syncControlsWithSelected();
@@ -1883,7 +1894,8 @@
             else if (e.ctrlKey || e.metaKey) { toggleInSelection(hit.id); return; }
             else setSelection([hit.id], hit.id);
 
-            if (hit.locked) return;
+            // Если движение заблокировано (сам слой или его маска) — не начинаем drag
+            if (isLayerMovementBlocked(hit)) return;
 
             $board.setPointerCapture(e.pointerId);
             pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -1908,12 +1920,12 @@
             const targets = [];
             selectedIds.forEach(id => {
                 const l = getLayer(id);
-                if (!l || l.locked) return;
+                if (!l || isLayerMovementBlocked(l)) return;
                 if (l.maskId) {
                     if (selectedIds.includes(l.maskId)) return;
                     if (byMaskId.has(l.maskId)) return;
                     const mask = getLayer(l.maskId);
-                    if (!mask || mask.locked) return;
+                    if (!mask || mask.locked) return; // заблокированную маску не двигаем
                     byMaskId.add(l.maskId);
                     targets.push({ obj: mask, isMask: true });
                 } else {
@@ -1933,7 +1945,8 @@
             const dist = pts.length >= 2 ? Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) : 1;
 
             const insideClip = layer && layer.maskId && cx && cy ? isPointInClip(layer, cx, cy) : false;
-            const singleWithMaskInside = selectedIds.length === 1 && layer && layer.maskId && insideClip && !layer.locked;
+            const maskLocked = layer && layer.maskId && (() => { const m = getLayer(layer.maskId); return m && m.locked; })();
+            const singleWithMaskInside = selectedIds.length === 1 && layer && layer.maskId && insideClip && !isLayerMovementBlocked(layer) && !maskLocked;
 
             const targets = (singleWithMaskInside
                 ? [{ obj: layer, isMask: false }]
@@ -1961,7 +1974,7 @@
 
         function updateGesture() {
             const layer = drag ? getLayer(drag.layerId) : null;
-            if (!layer || layer.locked) return;
+            if (!layer || isLayerMovementBlocked(layer)) return;
             const pts = [...pointers.values()];
             const midClient = {
                 x: pts.reduce((s, p) => s + p.x, 0) / pts.length,
@@ -1989,7 +2002,7 @@
                 const newScale = clamp(drag.startScale * factor, 0.05, 3);
                 if (layer.maskId) {
                     const mask = getLayer(layer.maskId);
-                    if (mask) {
+                    if (mask && !mask.locked) {
                         mask.scale = newScale;
                         applyLayerTransform(mask);
                         applyMaskToLayer(layer);
@@ -2018,7 +2031,7 @@
         $board.addEventListener("wheel", e => {
             if (IS_TEMPLATE) return;
             const hit = hitLayerAt(e.clientX, e.clientY);
-            if (!hit || hit.locked) return;
+            if (!hit || isLayerMovementBlocked(hit)) return;
             e.preventDefault();
             if (hit.id !== primaryId) setSelection([hit.id], hit.id);
             const layer = getLayer(hit.id);
@@ -2040,7 +2053,7 @@
 
             if (hit.maskId) {
                 const mask = getLayer(hit.maskId);
-                if (mask) {
+                if (mask && !mask.locked) {
                     mask.x = p.x + (mask.x - p.x) * k;
                     mask.y = p.y + (mask.y - p.y) * k;
                     mask.scale = newScale;
